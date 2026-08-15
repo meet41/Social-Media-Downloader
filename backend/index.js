@@ -1,10 +1,10 @@
 ﻿const express = require('express');
 const cors = require('cors');
-const { exec, spawn } = require('child_process');
+const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-// Determine ffmpeg path (bundled on Windows, system binary on Linux/Docker)
+// Determine ffmpeg path
 let ffmpegPath = 'ffmpeg';
 try {
     const installer = require('@ffmpeg-installer/ffmpeg');
@@ -15,14 +15,13 @@ try {
     ffmpegPath = 'ffmpeg';
 }
 
-// Determine yt-dlp binary (local node_modules on Windows, global /usr/local/bin/yt-dlp in Docker)
+// Determine yt-dlp binary
 let ytdlpBin = 'yt-dlp';
 const localYtDlp = path.join(__dirname, 'node_modules', 'yt-dlp-exec', 'bin', 'yt-dlp.exe');
 if (fs.existsSync(localYtDlp)) {
     ytdlpBin = localYtDlp;
 }
 
-// Helper promise wrapper for yt-dlp execution
 function runYtDlp(args) {
     return new Promise((resolve, reject) => {
         exec(`"${ytdlpBin}" ${args}`, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
@@ -37,14 +36,12 @@ function runYtDlp(args) {
 const app = express();
 const port = process.env.PORT || 3001;
 
-// Expose custom headers so browser can read exact Unicode filename
 app.use(cors({
     origin: '*',
     exposedHeaders: ['Content-Disposition', 'X-Filename']
 }));
 app.use(express.json());
 
-// Ensure temporary storage exists
 const tempDir = path.join(__dirname, 'temp');
 if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true });
@@ -52,7 +49,6 @@ if (!fs.existsSync(tempDir)) {
 
 const cookiesFile = path.join(__dirname, 'cookies.txt');
 
-// Helper to sanitize title for Windows/Linux filenames
 function sanitizeFilename(name) {
     if (!name) return 'media';
     return name
@@ -68,24 +64,26 @@ function getPlatformArgs(url) {
     const isFacebook = /facebook\.com|fb\.watch/i.test(url);
     const isInstagram = /instagram\.com/i.test(url);
 
-    let args = `--no-warnings --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" --add-header "accept-language:en-US,en;q=0.9"`;
+    let args = `--no-warnings`;
 
     if (fs.existsSync(cookiesFile)) {
         args += ` --cookies "${cookiesFile}"`;
     }
 
     if (isYouTube) {
-        args += ` --add-header "referer:https://www.youtube.com/" --extractor-args "youtube:player_client=android,web"`;
+        // Use iOS and Android embedded clients which bypass Datacenter IP Bot Checks on Render/AWS/Cloudflare
+        args += ` --extractor-args "youtube:player_client=ios,android,mweb" --add-header "user-agent:Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1" --add-header "accept-language:en-US,en;q=0.9"`;
     } else if (isFacebook) {
-        args += ` --add-header "referer:https://www.facebook.com/"`;
+        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" --add-header "referer:https://www.facebook.com/"`;
     } else if (isInstagram) {
-        args += ` --add-header "referer:https://www.instagram.com/"`;
+        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" --add-header "referer:https://www.instagram.com/"`;
+    } else {
+        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"`;
     }
 
     return args;
 }
 
-// Health check endpoint for cloud platforms
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', time: new Date() });
 });
@@ -102,7 +100,6 @@ app.post('/api/download', async (req, res) => {
 
         const platformArgs = getPlatformArgs(url);
 
-        // Fetch JSON metadata
         let info = null;
         try {
             const jsonOutput = await runYtDlp(`"${url}" --dump-json ${platformArgs}`);
@@ -139,7 +136,6 @@ app.post('/api/download', async (req, res) => {
 
         await runYtDlp(`"${url}" -o "${rawFilePath}" -f "${downloadFormat}" ${platformArgs}`);
 
-        // Locate downloaded raw file
         const files = fs.readdirSync(tempDir);
         const downloadedFile = files.find(f => f.startsWith(`raw_${timestamp}`));
 
@@ -150,7 +146,6 @@ app.post('/api/download', async (req, res) => {
         const downloadedFilePath = path.join(tempDir, downloadedFile);
         console.log(`Downloaded to ${downloadedFilePath}. Starting FFmpeg compression...`);
 
-        // Execute FFmpeg compression
         let ffmpegCmd = '';
         if (format === 'audio') {
             const audioBitrate = Math.max(targetTotalBitrate, 32000);
@@ -172,7 +167,6 @@ app.post('/api/download', async (req, res) => {
 
             console.log(`Compression successful: ${finalFilePath}`);
 
-            // Send standard UTF-8 headers
             const encodedFilename = encodeURIComponent(finalDownloadName);
             res.setHeader('Content-Disposition', `attachment; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`);
             res.setHeader('X-Filename', encodedFilename);
