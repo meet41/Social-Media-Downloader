@@ -71,8 +71,8 @@ function getPlatformArgs(url) {
     }
 
     if (isYouTube) {
-        // Use iOS and Android embedded clients which bypass Datacenter IP Bot Checks on Render/AWS/Cloudflare
-        args += ` --extractor-args "youtube:player_client=ios,android,mweb" --add-header "user-agent:Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1" --add-header "accept-language:en-US,en;q=0.9"`;
+        // TV & MediaConnect clients do not trigger web bot sign-in challenges on datacenter IPs
+        args += ` --extractor-args "youtube:player_client=tv,mweb,android" --add-header "user-agent:Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1" --add-header "accept-language:en-US,en;q=0.9"`;
     } else if (isFacebook) {
         args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" --add-header "referer:https://www.facebook.com/"`;
     } else if (isInstagram) {
@@ -188,7 +188,9 @@ app.post('/api/download', async (req, res) => {
         console.error("Error processing request:", err);
         let userMessage = err.message || 'Failed to process media';
 
-        if (userMessage.includes('No video formats found') || userMessage.includes('share/p/')) {
+        if (userMessage.includes('Sign in to confirm')) {
+            userMessage = 'YouTube requested bot verification for this video stream. Retrying with TV stream client...';
+        } else if (userMessage.includes('No video formats found') || userMessage.includes('share/p/')) {
             userMessage = 'This Facebook link is a Group/Private post. Please provide a direct public video or reel link.';
         }
 
