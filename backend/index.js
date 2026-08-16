@@ -52,6 +52,8 @@ function getPlatformArgs(url, clientMode = 'android') {
     let args = `--no-warnings --no-check-certificates`;
 
     if (isYouTube) {
+        // Enforce --no-cookies to prevent yt-dlp from picking up IP-mismatched cookies on cloud servers
+        args += ` --no-cookies`;
         if (clientMode === 'android') {
             args += ` --extractor-args "youtube:player_client=android"`;
         } else if (clientMode === 'mweb') {
