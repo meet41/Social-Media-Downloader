@@ -19,9 +19,9 @@ function runYtDlp(argsArray) {
         child.stderr.on('data', data => { stderr += data.toString(); });
 
         child.on('close', code => {
-            if (code !== 0 && (!stdout || !stdout.trim())) {
+            if (code !== 0) {
                 console.error(`[yt-dlp error] Code: ${code}, Stderr:`, stderr.substring(0, 300));
-                return reject(new Error(stderr || `yt-dlp process exited with code ${code}`));
+                return reject(new Error(stderr || stdout || `yt-dlp process exited with code ${code}`));
             }
             resolve(stdout);
         });
@@ -53,18 +53,18 @@ function sanitizeFilename(name) {
     return cleaned.substring(0, 80) || 'media';
 }
 
-function getPlatformArgsArray(url, clientMode = 'mweb') {
+function getPlatformArgsArray(url, clientMode = 'android') {
     const isYouTube = /youtu(\.be|be\.com)/i.test(url);
     const args = ['--no-warnings', '--no-check-certificates'];
 
     if (isYouTube) {
         args.push('--no-cookies');
-        if (clientMode === 'mweb') {
-            args.push('--extractor-args', 'youtube:player_client=mweb,android');
-        } else if (clientMode === 'android') {
+        if (clientMode === 'android') {
             args.push('--extractor-args', 'youtube:player_client=android,mweb');
+        } else if (clientMode === 'mweb') {
+            args.push('--extractor-args', 'youtube:player_client=mweb,android');
         } else {
-            args.push('--extractor-args', 'youtube:player_client=mweb,android,web_creator');
+            args.push('--extractor-args', 'youtube:player_client=android,mweb,web_creator');
         }
     } else {
         args.push('--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36');
@@ -97,18 +97,18 @@ app.post('/api/download', async (req, res) => {
         const timestamp = Date.now();
         const downloadedFilePath = path.join(tempDir, `raw_${timestamp}.media`);
 
-        // Step 1: Metadata extraction
+        // Step 1: Metadata extraction (android client first)
         let info = null;
         try {
-            const jsonOutput = await runYtDlp([url, '--dump-json', ...getPlatformArgsArray(url, 'mweb')]);
+            const jsonOutput = await runYtDlp([url, '--dump-json', ...getPlatformArgsArray(url, 'android')]);
             info = JSON.parse(jsonOutput);
         } catch (e) {
-            console.warn('[Metadata] mweb mode notice, falling back:', e.message ? e.message.substring(0, 100) : '');
+            console.warn('[Metadata] android mode notice, trying mweb:', e.message ? e.message.substring(0, 100) : '');
             try {
-                const jsonOutput = await runYtDlp([url, '--dump-json', ...getPlatformArgsArray(url, 'android')]);
+                const jsonOutput = await runYtDlp([url, '--dump-json', ...getPlatformArgsArray(url, 'mweb')]);
                 info = JSON.parse(jsonOutput);
             } catch (err2) {
-                console.warn('[Metadata] android fallback notice:', err2.message ? err2.message.substring(0, 100) : '');
+                console.warn('[Metadata] mweb fallback notice:', err2.message ? err2.message.substring(0, 100) : '');
             }
         }
 
@@ -131,26 +131,26 @@ app.post('/api/download', async (req, res) => {
         const targetTotalBitrate = Math.floor((targetSize * 8) / duration);
         const finalFilePath = path.join(tempDir, `processed_${timestamp}.${extension}`);
 
-        // Step 2: Stream Download using spawn and --no-part
+        // Step 2: Stream Download (android client first)
         const downloadArgs = [
             url,
             '-o', downloadedFilePath,
             '-f', 'b/best[height<=480]/best',
             '--no-part',
-            ...getPlatformArgsArray(url, 'mweb')
+            ...getPlatformArgsArray(url, 'android')
         ];
 
         console.log(`[Download] Downloading stream...`);
         try {
             await runYtDlp(downloadArgs);
         } catch (dlErr) {
-            console.warn('[Download] Retrying with android client...', dlErr.message ? dlErr.message.substring(0, 100) : '');
+            console.warn('[Download] Retrying with mweb client...', dlErr.message ? dlErr.message.substring(0, 100) : '');
             const fallbackArgs = [
                 url,
                 '-o', downloadedFilePath,
                 '-f', 'b/best[height<=480]/best',
                 '--no-part',
-                ...getPlatformArgsArray(url, 'android')
+                ...getPlatformArgsArray(url, 'mweb')
             ];
             await runYtDlp(fallbackArgs);
         }
