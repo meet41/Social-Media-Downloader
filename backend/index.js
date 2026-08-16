@@ -136,8 +136,7 @@ app.post('/api/download', async (req, res) => {
         const targetTotalBitrate = Math.floor((targetSize * 8) / duration);
 
         const timestamp = Date.now();
-        const rawFileBase = path.join(tempDir, `raw_${timestamp}`);
-        const rawFilePattern = `${rawFileBase}.%(ext)s`;
+        const downloadedFilePath = path.join(tempDir, `raw_${timestamp}.media`);
         const finalFilePath = path.join(tempDir, `processed_${timestamp}.${extension}`);
 
         // Step 2: Media Stream Download
@@ -146,7 +145,6 @@ app.post('/api/download', async (req, res) => {
 
         let downloadSuccess = false;
         let lastError = null;
-        let downloadedFile = null;
 
         const dlModes = [successfulMode, ...modes.filter(m => m !== successfulMode)];
 
@@ -156,40 +154,33 @@ app.post('/api/download', async (req, res) => {
                 console.log(`[Download] Attempting download with mode '${dlMode}'...`);
 
                 try {
-                    await runYtDlp(`"${url}" -o "${rawFilePattern}" -f "${downloadFormat}" ${currentArgs}`);
+                    await runYtDlp(`"${url}" -o "${downloadedFilePath}" -f "${downloadFormat}" ${currentArgs}`);
                 } catch (fErr) {
                     console.warn(`[Download] Format-constrained attempt failed, retrying unconstrained...`);
-                    await runYtDlp(`"${url}" -o "${rawFilePattern}" ${currentArgs}`);
+                    await runYtDlp(`"${url}" -o "${downloadedFilePath}" ${currentArgs}`);
                 }
 
-                const files = fs.readdirSync(tempDir);
-                downloadedFile = files.find(f => f.includes(String(timestamp)) && !f.endsWith('.part'));
-                if (downloadedFile) {
+                if (fs.existsSync(downloadedFilePath) && fs.statSync(downloadedFilePath).size > 0) {
                     downloadSuccess = true;
-                    console.log(`[Download] Verified file created on disk: ${downloadedFile}`);
+                    console.log(`[Download] Stream saved directly to: ${downloadedFilePath}`);
                     break;
                 }
             } catch (err) {
                 lastError = err;
-                console.warn(`[Download] Download mode '${dlMode}' failed:`, err.message ? err.message.substring(0, 120) : '');
+                console.warn(`[Download] Mode '${dlMode}' notice:`, err.message ? err.message.substring(0, 120) : '');
 
-                const files = fs.readdirSync(tempDir);
-                downloadedFile = files.find(f => f.includes(String(timestamp)) && !f.endsWith('.part'));
-                if (downloadedFile) {
+                if (fs.existsSync(downloadedFilePath) && fs.statSync(downloadedFilePath).size > 0) {
                     downloadSuccess = true;
-                    console.log(`[Download] Verified file created on disk despite notice: ${downloadedFile}`);
+                    console.log(`[Download] Stream saved directly to: ${downloadedFilePath}`);
                     break;
                 }
             }
         }
 
-        if (!downloadSuccess || !downloadedFile) {
-            const allFiles = fs.readdirSync(tempDir);
-            const detailMsg = lastError ? lastError.message : 'No error message caught';
-            throw new Error(`Download failed (${detailMsg}). Temp files: ${allFiles.join(', ')}`);
+        if (!downloadSuccess || !fs.existsSync(downloadedFilePath)) {
+            throw lastError || new Error("Failed to download media stream file.");
         }
 
-        const downloadedFilePath = path.join(tempDir, downloadedFile);
         console.log(`[FFmpeg] Processing ${downloadedFilePath}...`);
 
         let ffmpegCmd = '';
