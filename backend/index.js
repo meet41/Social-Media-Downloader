@@ -4,7 +4,7 @@ const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-// Determine ffmpeg path
+// Determine ffmpeg binary path
 let ffmpegPath = 'ffmpeg';
 try {
     const installer = require('@ffmpeg-installer/ffmpeg');
@@ -47,16 +47,28 @@ if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true });
 }
 
+// Always ensure cookies are freshly written to cookies.txt on each startup / request
 const cookiesFile = path.join(__dirname, 'cookies.txt');
 
-if (process.env.YOUTUBE_COOKIES) {
-    try {
-        fs.writeFileSync(cookiesFile, process.env.YOUTUBE_COOKIES, 'utf8');
-        console.log("Loaded cookies from YOUTUBE_COOKIES environment variable.");
-    } catch (e) {
-        console.error("Failed to write cookies from env:", e);
+function syncCookies() {
+    if (process.env.YOUTUBE_COOKIES) {
+        try {
+            // Unescape escaped newlines if passed as single-line env var
+            let content = process.env.YOUTUBE_COOKIES;
+            if (content.includes('\\n')) {
+                content = content.replace(/\\n/g, '\n');
+            }
+            fs.writeFileSync(cookiesFile, content.trim(), 'utf8');
+            return true;
+        } catch (e) {
+            console.error("Failed to sync cookies from env:", e);
+        }
     }
+    return fs.existsSync(cookiesFile);
 }
+
+// Initial sync
+syncCookies();
 
 function sanitizeFilename(name) {
     if (!name) return 'media';
@@ -75,25 +87,28 @@ function getPlatformArgs(url) {
 
     let args = `--no-warnings`;
 
-    if (fs.existsSync(cookiesFile)) {
+    const hasCookies = syncCookies();
+    if (hasCookies) {
         args += ` --cookies "${cookiesFile}"`;
     }
 
     if (isYouTube) {
-        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" --add-header "accept-language:en-US,en;q=0.9"`;
+        // Embed standard desktop headers matching the exported Chrome cookies
+        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36" --add-header "accept-language:en-US,en;q=0.9"`;
     } else if (isFacebook) {
-        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" --add-header "referer:https://www.facebook.com/"`;
+        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36" --add-header "referer:https://www.facebook.com/"`;
     } else if (isInstagram) {
-        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" --add-header "referer:https://www.instagram.com/"`;
+        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36" --add-header "referer:https://www.instagram.com/"`;
     } else {
-        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"`;
+        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
     }
 
     return args;
 }
 
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', time: new Date() });
+    const hasCookies = syncCookies();
+    res.json({ status: 'ok', cookies_loaded: hasCookies, time: new Date() });
 });
 
 app.post('/api/download', async (req, res) => {
@@ -113,7 +128,7 @@ app.post('/api/download', async (req, res) => {
             const jsonOutput = await runYtDlp(`"${url}" --dump-json ${platformArgs}`);
             info = JSON.parse(jsonOutput);
         } catch (metaErr) {
-            console.warn("Direct dump-json failed, proceeding with default estimation...", metaErr.message);
+            console.warn("Direct dump-json failed, proceeding with estimation...", metaErr.message);
         }
 
         const rawTitle = (info && (info.title || info.fulltitle)) || 'download';
@@ -139,15 +154,14 @@ app.post('/api/download', async (req, res) => {
         const rawFilePath = path.join(tempDir, `raw_${timestamp}.%(ext)s`);
         const finalFilePath = path.join(tempDir, `processed_${timestamp}.${extension}`);
 
-        // Matches exactly what worked locally: format "best" or "bestaudio"
-        const downloadFormat = format === 'audio' ? 'bestaudio' : 'best';
-        console.log(`Downloading stream from source with format: ${downloadFormat}...`);
+        // Download formats: try best audio / video first, then robust fallback
+        const downloadFormat = format === 'audio' ? 'ba/b' : 'bv*+ba/b';
+        console.log(`Downloading stream with format '${downloadFormat}'...`);
 
         try {
             await runYtDlp(`"${url}" -o "${rawFilePath}" -f "${downloadFormat}" ${platformArgs}`);
         } catch (firstErr) {
-            console.warn(`Primary format '${downloadFormat}' failed, falling back to universal default...`);
-            // Universal fallback without strict format constraints
+            console.warn(`Format '${downloadFormat}' failed, retrying without -f constraint...`);
             await runYtDlp(`"${url}" -o "${rawFilePath}" ${platformArgs}`);
         }
 
