@@ -47,7 +47,18 @@ if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true });
 }
 
+// Check for cookies file (supports cookies.txt or YOUTUBE_COOKIES env var on Render)
 const cookiesFile = path.join(__dirname, 'cookies.txt');
+
+// If YOUTUBE_COOKIES env variable is set on cloud hosting, write it to cookies.txt automatically
+if (process.env.YOUTUBE_COOKIES && !fs.existsSync(cookiesFile)) {
+    try {
+        fs.writeFileSync(cookiesFile, process.env.YOUTUBE_COOKIES, 'utf8');
+        console.log("Loaded cookies from YOUTUBE_COOKIES environment variable.");
+    } catch (e) {
+        console.error("Failed to write cookies from env:", e);
+    }
+}
 
 function sanitizeFilename(name) {
     if (!name) return 'media';
@@ -59,7 +70,7 @@ function sanitizeFilename(name) {
         .substring(0, 100);
 }
 
-function getPlatformArgs(url) {
+function getPlatformArgs(url, clientType = 'default') {
     const isYouTube = /youtu(\.be|be\.com)/i.test(url);
     const isFacebook = /facebook\.com|fb\.watch/i.test(url);
     const isInstagram = /instagram\.com/i.test(url);
@@ -71,8 +82,16 @@ function getPlatformArgs(url) {
     }
 
     if (isYouTube) {
-        // TV & MediaConnect clients do not trigger web bot sign-in challenges on datacenter IPs
-        args += ` --extractor-args "youtube:player_client=tv,mweb,android" --add-header "user-agent:Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1" --add-header "accept-language:en-US,en;q=0.9"`;
+        if (clientType === 'tv') {
+            args += ` --extractor-args "youtube:player_client=tv_embedded,tv" --add-header "user-agent:Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1"`;
+        } else if (clientType === 'ios') {
+            args += ` --extractor-args "youtube:player_client=ios" --add-header "user-agent:Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"`;
+        } else if (clientType === 'android') {
+            args += ` --extractor-args "youtube:player_client=android" --add-header "user-agent:Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"`;
+        } else {
+            args += ` --extractor-args "youtube:player_client=ios,tv,android,mweb"`;
+        }
+        args += ` --add-header "accept-language:en-US,en;q=0.9"`;
     } else if (isFacebook) {
         args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" --add-header "referer:https://www.facebook.com/"`;
     } else if (isInstagram) {
@@ -98,14 +117,22 @@ app.post('/api/download', async (req, res) => {
     try {
         console.log(`Processing media request for: ${url}`);
 
-        const platformArgs = getPlatformArgs(url);
+        const isYouTube = /youtu(\.be|be\.com)/i.test(url);
+        let platformArgs = getPlatformArgs(url, 'default');
 
+        // Multi-client fallback strategy for YouTube datacenter blocking
         let info = null;
-        try {
-            const jsonOutput = await runYtDlp(`"${url}" --dump-json ${platformArgs}`);
-            info = JSON.parse(jsonOutput);
-        } catch (metaErr) {
-            console.warn("Direct dump-json failed, attempting fallback...", metaErr.message);
+        const clientFallbacks = isYouTube ? ['default', 'ios', 'tv', 'android'] : ['default'];
+
+        for (const client of clientFallbacks) {
+            try {
+                platformArgs = getPlatformArgs(url, client);
+                const jsonOutput = await runYtDlp(`"${url}" --dump-json ${platformArgs}`);
+                info = JSON.parse(jsonOutput);
+                if (info) break;
+            } catch (err) {
+                console.warn(`Extraction attempt with client '${client}' failed:`, err.message.substring(0, 120));
+            }
         }
 
         const rawTitle = (info && (info.title || info.fulltitle)) || 'download';
@@ -134,7 +161,24 @@ app.post('/api/download', async (req, res) => {
         const downloadFormat = format === 'audio' ? 'bestaudio/best' : 'bestvideo+bestaudio/best';
         console.log("Downloading stream from source...");
 
-        await runYtDlp(`"${url}" -o "${rawFilePath}" -f "${downloadFormat}" ${platformArgs}`);
+        let downloadSuccess = false;
+        let lastDownloadError = null;
+
+        for (const client of clientFallbacks) {
+            try {
+                const currentArgs = getPlatformArgs(url, client);
+                await runYtDlp(`"${url}" -o "${rawFilePath}" -f "${downloadFormat}" ${currentArgs}`);
+                downloadSuccess = true;
+                break;
+            } catch (dlErr) {
+                lastDownloadError = dlErr;
+                console.warn(`Download with client '${client}' failed, trying next fallback...`);
+            }
+        }
+
+        if (!downloadSuccess) {
+            throw lastDownloadError || new Error("Failed to download video stream from source.");
+        }
 
         const files = fs.readdirSync(tempDir);
         const downloadedFile = files.find(f => f.startsWith(`raw_${timestamp}`));
@@ -188,8 +232,8 @@ app.post('/api/download', async (req, res) => {
         console.error("Error processing request:", err);
         let userMessage = err.message || 'Failed to process media';
 
-        if (userMessage.includes('Sign in to confirm')) {
-            userMessage = 'YouTube requested bot verification for this video stream. Retrying with TV stream client...';
+        if (userMessage.includes('Sign in to confirm') || userMessage.includes('bot')) {
+            userMessage = 'YouTube is blocking cloud datacenter IP requests. Add a YOUTUBE_COOKIES environment variable in Render settings to authenticate.';
         } else if (userMessage.includes('No video formats found') || userMessage.includes('share/p/')) {
             userMessage = 'This Facebook link is a Group/Private post. Please provide a direct public video or reel link.';
         }
