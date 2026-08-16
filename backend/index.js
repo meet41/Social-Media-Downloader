@@ -50,7 +50,6 @@ if (!fs.existsSync(tempDir)) {
 // Check for cookies file (supports cookies.txt or YOUTUBE_COOKIES env var on Render)
 const cookiesFile = path.join(__dirname, 'cookies.txt');
 
-// If YOUTUBE_COOKIES env variable is set on cloud hosting, write it to cookies.txt automatically
 if (process.env.YOUTUBE_COOKIES && !fs.existsSync(cookiesFile)) {
     try {
         fs.writeFileSync(cookiesFile, process.env.YOUTUBE_COOKIES, 'utf8');
@@ -82,14 +81,14 @@ function getPlatformArgs(url, clientType = 'default') {
     }
 
     if (isYouTube) {
-        if (clientType === 'tv') {
-            args += ` --extractor-args "youtube:player_client=tv_embedded,tv" --add-header "user-agent:Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1"`;
-        } else if (clientType === 'ios') {
+        if (clientType === 'ios') {
             args += ` --extractor-args "youtube:player_client=ios" --add-header "user-agent:Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"`;
         } else if (clientType === 'android') {
             args += ` --extractor-args "youtube:player_client=android" --add-header "user-agent:Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"`;
+        } else if (clientType === 'mweb') {
+            args += ` --extractor-args "youtube:player_client=mweb" --add-header "user-agent:Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"`;
         } else {
-            args += ` --extractor-args "youtube:player_client=ios,tv,android,mweb"`;
+            args += ` --extractor-args "youtube:player_client=ios,android,mweb"`;
         }
         args += ` --add-header "accept-language:en-US,en;q=0.9"`;
     } else if (isFacebook) {
@@ -120,9 +119,8 @@ app.post('/api/download', async (req, res) => {
         const isYouTube = /youtu(\.be|be\.com)/i.test(url);
         let platformArgs = getPlatformArgs(url, 'default');
 
-        // Multi-client fallback strategy for YouTube datacenter blocking
         let info = null;
-        const clientFallbacks = isYouTube ? ['default', 'ios', 'tv', 'android'] : ['default'];
+        const clientFallbacks = isYouTube ? ['default', 'ios', 'android', 'mweb'] : ['default'];
 
         for (const client of clientFallbacks) {
             try {
@@ -158,7 +156,11 @@ app.post('/api/download', async (req, res) => {
         const rawFilePath = path.join(tempDir, `raw_${timestamp}.%(ext)s`);
         const finalFilePath = path.join(tempDir, `processed_${timestamp}.${extension}`);
 
-        const downloadFormat = format === 'audio' ? 'bestaudio/best' : 'bestvideo+bestaudio/best';
+        // Flexible fallback formats to ensure yt-dlp always finds a match
+        const downloadFormat = format === 'audio' 
+            ? 'bestaudio/best[height<=480]/best' 
+            : 'bestvideo[height<=720]+bestaudio/best[height<=720]/bestvideo+bestaudio/best';
+
         console.log("Downloading stream from source...");
 
         let downloadSuccess = false;
@@ -232,9 +234,7 @@ app.post('/api/download', async (req, res) => {
         console.error("Error processing request:", err);
         let userMessage = err.message || 'Failed to process media';
 
-        if (userMessage.includes('Sign in to confirm') || userMessage.includes('bot')) {
-            userMessage = 'YouTube is blocking cloud datacenter IP requests. Add a YOUTUBE_COOKIES environment variable in Render settings to authenticate.';
-        } else if (userMessage.includes('No video formats found') || userMessage.includes('share/p/')) {
+        if (userMessage.includes('No video formats found') || userMessage.includes('share/p/')) {
             userMessage = 'This Facebook link is a Group/Private post. Please provide a direct public video or reel link.';
         }
 
