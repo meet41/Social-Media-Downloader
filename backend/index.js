@@ -52,16 +52,16 @@ function getPlatformArgs(url, clientMode = 'android') {
     let args = `--no-warnings --no-check-certificates`;
 
     if (isYouTube) {
-        // Enforce --no-cookies to prevent yt-dlp from picking up IP-mismatched cookies on cloud servers
         args += ` --no-cookies`;
         if (clientMode === 'android') {
-            args += ` --extractor-args "youtube:player_client=android"`;
+            args += ` --extractor-args "youtube:player_client=android" --add-header "user-agent:com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip"`;
         } else if (clientMode === 'mweb') {
-            args += ` --extractor-args "youtube:player_client=mweb"`;
+            args += ` --extractor-args "youtube:player_client=mweb" --add-header "user-agent:Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15"`;
         } else if (clientMode === 'web_creator') {
-            args += ` --extractor-args "youtube:player_client=web_creator"`;
+            args += ` --extractor-args "youtube:player_client=web_creator" --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
+        } else {
+            args += ` --extractor-args "youtube:player_client=android" --add-header "user-agent:com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip"`;
         }
-        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
     } else if (isFacebook) {
         args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
         args += ` --add-header "referer:https://www.facebook.com/"`;
