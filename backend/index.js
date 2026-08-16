@@ -10,7 +10,7 @@ const ytdlpBin = 'yt-dlp';
 function runYtDlp(args) {
     return new Promise((resolve, reject) => {
         const cmd = `"${ytdlpBin}" ${args}`;
-        console.log(`[yt-dlp] Running command...`);
+        console.log(`[yt-dlp] Running: ${cmd.substring(0, 180)}...`);
         exec(cmd, { maxBuffer: 1024 * 1024 * 50, timeout: 180000 }, (error, stdout, stderr) => {
             if (error) {
                 return reject(new Error(stderr || stdout || error.message));
@@ -59,15 +59,14 @@ syncCookies();
 
 function sanitizeFilename(name) {
     if (!name) return 'media';
-    return name
-        .replace(/[\/\\:*?"<>|]/g, '')
-        .replace(/[\x00-\x1F\x7F]/g, '')
+    const cleaned = name
+        .replace(/[^\w\s-]/g, '')
         .replace(/\s+/g, ' ')
-        .trim()
-        .substring(0, 100);
+        .trim();
+    return cleaned.substring(0, 80) || 'media';
 }
 
-function getPlatformArgs(url, clientMode = 'mobile_cascade') {
+function getPlatformArgs(url, clientMode = 'all_clients') {
     const isYouTube = /youtu(\.be|be\.com)/i.test(url);
     const isFacebook = /facebook\.com|fb\.watch/i.test(url);
     const isInstagram = /instagram\.com/i.test(url);
@@ -80,11 +79,13 @@ function getPlatformArgs(url, clientMode = 'mobile_cascade') {
     }
 
     if (isYouTube) {
-        if (clientMode === 'mobile_cascade') {
-            args += ` --extractor-args "youtube:player_client=mweb,android,ios"`;
-        } else if (clientMode === 'tv_cascade') {
-            args += ` --extractor-args "youtube:player_client=tv_embedded,tv,mweb"`;
-        } else if (clientMode === 'web_cascade') {
+        if (clientMode === 'all_clients') {
+            args += ` --extractor-args "youtube:player_client=tv_embedded,android,ios,mweb"`;
+        } else if (clientMode === 'tv_only') {
+            args += ` --extractor-args "youtube:player_client=tv_embedded,tv"`;
+        } else if (clientMode === 'mobile_only') {
+            args += ` --extractor-args "youtube:player_client=android,ios,mweb"`;
+        } else if (clientMode === 'web_only') {
             args += ` --extractor-args "youtube:player_client=web_embedded,web"`;
         }
         args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
@@ -125,7 +126,7 @@ app.post('/api/download', async (req, res) => {
         console.log(`========================================`);
 
         const isYouTube = /youtu(\.be|be\.com)/i.test(url);
-        const modes = isYouTube ? ['mobile_cascade', 'tv_cascade', 'web_cascade'] : ['default'];
+        const modes = isYouTube ? ['all_clients', 'tv_only', 'mobile_only', 'web_only'] : ['default'];
 
         let info = null;
         let successfulMode = modes[0];
@@ -147,8 +148,8 @@ app.post('/api/download', async (req, res) => {
             }
         }
 
-        const rawTitle = (info && (info.title || info.fulltitle)) || 'download';
-        const safeTitle = sanitizeFilename(rawTitle) || 'download';
+        const rawTitle = (info && (info.title || info.fulltitle)) || 'media';
+        const safeTitle = sanitizeFilename(rawTitle) || 'media';
         const extension = format === 'audio' ? 'mp3' : 'mp4';
         const finalDownloadName = `${safeTitle}.${extension}`;
 
@@ -235,7 +236,7 @@ app.post('/api/download', async (req, res) => {
             console.log(`[FFmpeg] Compression completed: ${finalFilePath}`);
 
             const encodedFilename = encodeURIComponent(finalDownloadName);
-            res.setHeader('Content-Disposition', `attachment; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`);
+            res.setHeader('Content-Disposition', `attachment; filename="${encodedFilename}"`);
             res.setHeader('X-Filename', encodedFilename);
 
             const fileStream = fs.createReadStream(finalFilePath);
