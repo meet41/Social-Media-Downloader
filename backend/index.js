@@ -35,6 +35,55 @@ if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true });
 }
 
+const cookiesFile = path.join(__dirname, 'cookies.txt');
+
+function syncCookies() {
+    let rawContent = process.env.YOUTUBE_COOKIES || process.env.YOUTUBE_COOKIES_BASE64;
+
+    if (process.env.YOUTUBE_COOKIES_BASE64 && !process.env.YOUTUBE_COOKIES) {
+        try {
+            rawContent = Buffer.from(process.env.YOUTUBE_COOKIES_BASE64, 'base64').toString('utf8');
+        } catch (e) {
+            console.error("Failed to decode YOUTUBE_COOKIES_BASE64:", e);
+        }
+    }
+
+    if (rawContent) {
+        try {
+            let content = rawContent.replace(/\\n/g, '\n').replace(/\\r/g, '');
+            const lines = content.split('\n');
+            const fixedLines = ['# Netscape HTTP Cookie File', '# http://curl.haxx.se/rfc/cookie_spec.html', ''];
+
+            for (let line of lines) {
+                line = line.trim();
+                if (!line || line.startsWith('#')) continue;
+                const parts = line.split(/\s+/);
+                if (parts.length >= 7) {
+                    const domain = parts[0];
+                    const flag = parts[1].toUpperCase();
+                    const path = parts[2];
+                    const secure = parts[3].toUpperCase();
+                    const expiration = parts[4];
+                    const name = parts[5];
+                    const value = parts.slice(6).join(' ');
+                    fixedLines.push([domain, flag, path, secure, expiration, name, value].join('\t'));
+                }
+            }
+
+            if (fixedLines.length > 3) {
+                fs.writeFileSync(cookiesFile, fixedLines.join('\n'), 'utf8');
+                console.log(`[Cookies] Synced ${fixedLines.length - 3} valid Netscape cookies.`);
+                return true;
+            }
+        } catch (e) {
+            console.error("Failed to sync cookies from env:", e);
+        }
+    }
+    return fs.existsSync(cookiesFile) && fs.statSync(cookiesFile).size > 50;
+}
+
+syncCookies();
+
 function sanitizeFilename(name) {
     if (!name) return 'media';
     const cleaned = name
@@ -44,28 +93,33 @@ function sanitizeFilename(name) {
     return cleaned.substring(0, 80) || 'media';
 }
 
-function getPlatformArgs(url, clientMode = 'android') {
+function getPlatformArgs(url, clientMode = 'cookies_web') {
     const isYouTube = /youtu(\.be|be\.com)/i.test(url);
     const isFacebook = /facebook\.com|fb\.watch/i.test(url);
     const isInstagram = /instagram\.com/i.test(url);
 
     let args = `--no-warnings --no-check-certificates`;
 
+    const hasCookies = syncCookies();
+
     if (isYouTube) {
-        args += ` --no-cookies`;
-        if (clientMode === 'android') {
-            args += ` --extractor-args "youtube:player_client=android" --add-header "user-agent:com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip"`;
-        } else if (clientMode === 'mweb') {
-            args += ` --extractor-args "youtube:player_client=mweb" --add-header "user-agent:Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15"`;
-        } else if (clientMode === 'web_creator') {
-            args += ` --extractor-args "youtube:player_client=web_creator" --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
+        if (clientMode === 'cookies_web' && hasCookies) {
+            args += ` --cookies "${cookiesFile}" --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
+        } else if (clientMode === 'cookies_android' && hasCookies) {
+            args += ` --cookies "${cookiesFile}" --extractor-args "youtube:player_client=android" --add-header "user-agent:com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip"`;
+        } else if (clientMode === 'no_cookies_android') {
+            args += ` --no-cookies --extractor-args "youtube:player_client=android" --add-header "user-agent:com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip"`;
+        } else if (clientMode === 'no_cookies_mweb') {
+            args += ` --no-cookies --extractor-args "youtube:player_client=mweb" --add-header "user-agent:Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15"`;
         } else {
-            args += ` --extractor-args "youtube:player_client=android" --add-header "user-agent:com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip"`;
+            args += ` --no-cookies --extractor-args "youtube:player_client=android" --add-header "user-agent:com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip"`;
         }
     } else if (isFacebook) {
+        if (hasCookies) args += ` --cookies "${cookiesFile}"`;
         args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
         args += ` --add-header "referer:https://www.facebook.com/"`;
     } else if (isInstagram) {
+        if (hasCookies) args += ` --cookies "${cookiesFile}"`;
         args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
         args += ` --add-header "referer:https://www.instagram.com/"`;
     } else {
@@ -76,8 +130,10 @@ function getPlatformArgs(url, clientMode = 'android') {
 }
 
 app.get('/health', (req, res) => {
+    const hasCookies = syncCookies();
     res.json({
         status: 'ok',
+        cookies_loaded: hasCookies,
         yt_dlp_bin: ytdlpBin,
         time: new Date()
     });
@@ -96,7 +152,11 @@ app.post('/api/download', async (req, res) => {
         console.log(`========================================`);
 
         const isYouTube = /youtu(\.be|be\.com)/i.test(url);
-        const modes = isYouTube ? ['android', 'mweb', 'web_creator'] : ['default'];
+        const hasCookies = syncCookies();
+
+        const modes = isYouTube
+            ? (hasCookies ? ['cookies_web', 'cookies_android', 'no_cookies_android', 'no_cookies_mweb'] : ['no_cookies_android', 'no_cookies_mweb'])
+            : ['default'];
 
         let info = null;
         let successfulMode = modes[0];
