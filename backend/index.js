@@ -47,16 +47,17 @@ if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true });
 }
 
-// Always ensure cookies are freshly written to cookies.txt on each startup / request
 const cookiesFile = path.join(__dirname, 'cookies.txt');
 
 function syncCookies() {
     if (process.env.YOUTUBE_COOKIES) {
         try {
-            // Unescape escaped newlines if passed as single-line env var
             let content = process.env.YOUTUBE_COOKIES;
             if (content.includes('\\n')) {
                 content = content.replace(/\\n/g, '\n');
+            }
+            if (content.includes('\\t')) {
+                content = content.replace(/\\t/g, '\t');
             }
             fs.writeFileSync(cookiesFile, content.trim(), 'utf8');
             return true;
@@ -67,7 +68,6 @@ function syncCookies() {
     return fs.existsSync(cookiesFile);
 }
 
-// Initial sync
 syncCookies();
 
 function sanitizeFilename(name) {
@@ -80,7 +80,7 @@ function sanitizeFilename(name) {
         .substring(0, 100);
 }
 
-function getPlatformArgs(url) {
+function getPlatformArgs(url, mode = 'cookies') {
     const isYouTube = /youtu(\.be|be\.com)/i.test(url);
     const isFacebook = /facebook\.com|fb\.watch/i.test(url);
     const isInstagram = /instagram\.com/i.test(url);
@@ -88,13 +88,20 @@ function getPlatformArgs(url) {
     let args = `--no-warnings`;
 
     const hasCookies = syncCookies();
-    if (hasCookies) {
+    if (hasCookies && mode === 'cookies') {
         args += ` --cookies "${cookiesFile}"`;
     }
 
     if (isYouTube) {
-        // Embed standard desktop headers matching the exported Chrome cookies
-        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36" --add-header "accept-language:en-US,en;q=0.9"`;
+        if (mode === 'android') {
+            args += ` --extractor-args "youtube:player_client=android,web" --add-header "user-agent:com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip"`;
+        } else if (mode === 'ios') {
+            args += ` --extractor-args "youtube:player_client=ios,mweb" --add-header "user-agent:Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15"`;
+        } else if (mode === 'tv') {
+            args += ` --extractor-args "youtube:player_client=tv_embedded,tv"`;
+        } else {
+            args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36" --add-header "accept-language:en-US,en;q=0.9"`;
+        }
     } else if (isFacebook) {
         args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36" --add-header "referer:https://www.facebook.com/"`;
     } else if (isInstagram) {
@@ -121,14 +128,26 @@ app.post('/api/download', async (req, res) => {
     try {
         console.log(`Processing media request for: ${url}`);
 
-        const platformArgs = getPlatformArgs(url);
+        const isYouTube = /youtu(\.be|be\.com)/i.test(url);
+        // Cascade modes: Cookies -> Android client -> iOS client -> TV client -> Generic
+        const modes = isYouTube ? ['cookies', 'android', 'ios', 'tv', 'generic'] : ['cookies'];
 
         let info = null;
-        try {
-            const jsonOutput = await runYtDlp(`"${url}" --dump-json ${platformArgs}`);
-            info = JSON.parse(jsonOutput);
-        } catch (metaErr) {
-            console.warn("Direct dump-json failed, proceeding with estimation...", metaErr.message);
+        let successfulMode = 'cookies';
+
+        for (const mode of modes) {
+            try {
+                const platformArgs = getPlatformArgs(url, mode);
+                const jsonOutput = await runYtDlp(`"${url}" --dump-json ${platformArgs}`);
+                info = JSON.parse(jsonOutput);
+                if (info) {
+                    successfulMode = mode;
+                    console.log(`Successfully extracted metadata using mode: '${mode}'`);
+                    break;
+                }
+            } catch (metaErr) {
+                console.warn(`Extraction mode '${mode}' failed:`, metaErr.message ? metaErr.message.substring(0, 100) : '');
+            }
         }
 
         const rawTitle = (info && (info.title || info.fulltitle)) || 'download';
@@ -154,15 +173,34 @@ app.post('/api/download', async (req, res) => {
         const rawFilePath = path.join(tempDir, `raw_${timestamp}.%(ext)s`);
         const finalFilePath = path.join(tempDir, `processed_${timestamp}.${extension}`);
 
-        // Download formats: try best audio / video first, then robust fallback
         const downloadFormat = format === 'audio' ? 'ba/b' : 'bv*+ba/b';
-        console.log(`Downloading stream with format '${downloadFormat}'...`);
+        console.log(`Downloading stream with format '${downloadFormat}' using mode '${successfulMode}'...`);
 
-        try {
-            await runYtDlp(`"${url}" -o "${rawFilePath}" -f "${downloadFormat}" ${platformArgs}`);
-        } catch (firstErr) {
-            console.warn(`Format '${downloadFormat}' failed, retrying without -f constraint...`);
-            await runYtDlp(`"${url}" -o "${rawFilePath}" ${platformArgs}`);
+        let downloadSuccess = false;
+        let lastError = null;
+
+        // Try downloading with successful mode, then fallback to other modes if necessary
+        const dlModes = [successfulMode, ...modes.filter(m => m !== successfulMode)];
+
+        for (const dlMode of dlModes) {
+            try {
+                const currentArgs = getPlatformArgs(url, dlMode);
+                try {
+                    await runYtDlp(`"${url}" -o "${rawFilePath}" -f "${downloadFormat}" ${currentArgs}`);
+                } catch (fErr) {
+                    await runYtDlp(`"${url}" -o "${rawFilePath}" ${currentArgs}`);
+                }
+                downloadSuccess = true;
+                console.log(`Download stream successful using mode: '${dlMode}'`);
+                break;
+            } catch (err) {
+                lastError = err;
+                console.warn(`Download mode '${dlMode}' failed, trying next...`);
+            }
+        }
+
+        if (!downloadSuccess) {
+            throw lastError || new Error("Failed to download video stream.");
         }
 
         const files = fs.readdirSync(tempDir);
