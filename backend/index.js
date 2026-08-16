@@ -138,7 +138,8 @@ app.post('/api/download', async (req, res) => {
         const targetTotalBitrate = Math.floor((targetSize * 8) / duration);
 
         const timestamp = Date.now();
-        const rawFilePath = path.join(tempDir, `raw_${timestamp}.%(ext)s`);
+        const rawFileBase = path.join(tempDir, `raw_${timestamp}`);
+        const rawFilePattern = `${rawFileBase}.%(ext)s`;
         const finalFilePath = path.join(tempDir, `processed_${timestamp}.${extension}`);
 
         // Step 2: Media Stream Download
@@ -156,10 +157,10 @@ app.post('/api/download', async (req, res) => {
                 console.log(`[Download] Attempting download with mode '${dlMode}'...`);
 
                 try {
-                    await runYtDlp(`"${url}" -o "${rawFilePath}" -f "${downloadFormat}" ${currentArgs}`);
+                    await runYtDlp(`"${url}" -o "${rawFilePattern}" -f "${downloadFormat}" ${currentArgs}`);
                 } catch (fErr) {
                     console.warn(`[Download] Format-constrained attempt failed, retrying unconstrained...`);
-                    await runYtDlp(`"${url}" -o "${rawFilePath}" ${currentArgs}`);
+                    await runYtDlp(`"${url}" -o "${rawFilePattern}" ${currentArgs}`);
                 }
 
                 downloadSuccess = true;
@@ -176,9 +177,10 @@ app.post('/api/download', async (req, res) => {
         }
 
         const files = fs.readdirSync(tempDir);
-        const downloadedFile = files.find(f => f.startsWith(`raw_${timestamp}`));
+        const downloadedFile = files.find(f => f.includes(String(timestamp)));
 
         if (!downloadedFile) {
+            console.error(`[Error] Files in tempDir:`, files);
             throw new Error("Downloaded file not found on server.");
         }
 
