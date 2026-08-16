@@ -61,10 +61,11 @@ if (!fs.existsSync(tempDir)) {
 function sanitizeFilename(name) {
     if (!name) return 'media';
     const cleaned = name
-        .replace(/[^\w\s-]/g, '')
+        .replace(/[\\/:*?"<>|\0]/g, '')
+        .replace(/[\r\n\t]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
-    return cleaned.substring(0, 80) || 'media';
+    return cleaned.substring(0, 150) || 'media';
 }
 
 function getPlatformArgsArray(url, clientMode = 'android') {
@@ -199,7 +200,7 @@ app.post('/api/download', async (req, res) => {
             console.log(`[FFmpeg] Compression completed: ${finalFilePath}`);
 
             const encodedFilename = encodeURIComponent(finalDownloadName);
-            res.setHeader('Content-Disposition', `attachment; filename="${encodedFilename}"`);
+            res.setHeader('Content-Disposition', `attachment; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`);
             res.setHeader('X-Filename', encodedFilename);
 
             const fileStream = fs.createReadStream(finalFilePath);
