@@ -10,7 +10,7 @@ const ytdlpBin = 'yt-dlp';
 function runYtDlp(args) {
     return new Promise((resolve, reject) => {
         const cmd = `"${ytdlpBin}" ${args}`;
-        console.log(`[yt-dlp] Running: ${cmd.substring(0, 180)}...`);
+        console.log(`[yt-dlp] Executing: ${cmd.substring(0, 180)}...`);
         exec(cmd, { maxBuffer: 1024 * 1024 * 50, timeout: 180000 }, (error, stdout, stderr) => {
             if (error) {
                 return reject(new Error(stderr || stdout || error.message));
@@ -52,16 +52,14 @@ function getPlatformArgs(url, clientMode = 'tv_embedded') {
 
     if (isYouTube) {
         if (clientMode === 'tv_embedded') {
-            args += ` --extractor-args "youtube:player_client=tv_embedded,ios"`;
-        } else if (clientMode === 'mweb_ios') {
-            args += ` --extractor-args "youtube:player_client=mweb,ios"`;
-        } else if (clientMode === 'android') {
-            args += ` --extractor-args "youtube:player_client=android,web"`;
-        } else if (clientMode === 'web') {
-            args += ` --extractor-args "youtube:player_client=web_embedded,web"`;
+            args += ` --extractor-args "youtube:player_client=tv_embedded"`;
+        } else if (clientMode === 'android_vr') {
+            args += ` --extractor-args "youtube:player_client=android_vr"`;
+        } else if (clientMode === 'mweb') {
+            args += ` --extractor-args "youtube:player_client=mweb"`;
+        } else if (clientMode === 'web_embedded') {
+            args += ` --extractor-args "youtube:player_client=web_embedded"`;
         }
-        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
-        args += ` --add-header "accept-language:en-US,en;q=0.9"`;
     } else if (isFacebook) {
         args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
         args += ` --add-header "referer:https://www.facebook.com/"`;
@@ -96,7 +94,7 @@ app.post('/api/download', async (req, res) => {
         console.log(`========================================`);
 
         const isYouTube = /youtu(\.be|be\.com)/i.test(url);
-        const modes = isYouTube ? ['tv_embedded', 'mweb_ios', 'android', 'web'] : ['default'];
+        const modes = isYouTube ? ['tv_embedded', 'android_vr', 'mweb', 'web_embedded'] : ['default'];
 
         let info = null;
         let successfulMode = modes[0];
