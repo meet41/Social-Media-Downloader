@@ -4,32 +4,27 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-function getYtDlpBin() {
-    if (process.platform === 'win32') {
-        const userPath = process.env.LOCALAPPDATA || 'C:\\Users\\meetk\\AppData\\Local';
-        const pythonPaths = [
-            path.join(userPath, 'Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\Scripts\\yt-dlp.exe'),
-            path.join(userPath, 'Programs\\Python\\Python313\\Scripts\\yt-dlp.exe'),
-            path.join(userPath, 'Programs\\Python\\Python312\\Scripts\\yt-dlp.exe'),
-            path.join(userPath, 'Programs\\Python\\Python311\\Scripts\\yt-dlp.exe'),
-            'yt-dlp.exe',
-            'yt-dlp'
-        ];
-        for (const p of pythonPaths) {
-            if (fs.existsSync(p)) return p;
+function getFfmpegPath() {
+    try {
+        const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
+        if (ffmpegInstaller && ffmpegInstaller.path && fs.existsSync(ffmpegInstaller.path)) {
+            console.log(`[FFmpeg] Using binary at: ${ffmpegInstaller.path}`);
+            return ffmpegInstaller.path;
         }
-    }
-    return 'yt-dlp';
+    } catch (e) {}
+    return 'ffmpeg';
 }
 
-const ffmpegPath = 'ffmpeg';
-const ytdlpBin = getYtDlpBin();
+const ffmpegPath = getFfmpegPath();
 
 function runYtDlp(argsArray) {
     return new Promise((resolve, reject) => {
-        console.log(`[yt-dlp] Spawning (${ytdlpBin}): ${argsArray.join(' ').substring(0, 150)}...`);
         const isWin = process.platform === 'win32';
-        const child = spawn(ytdlpBin, argsArray, { shell: isWin });
+        const cmd = isWin ? 'python' : 'python3';
+        const fullArgs = ['-m', 'yt_dlp', ...argsArray];
+
+        console.log(`[yt-dlp] Spawning: ${cmd} ${fullArgs.join(' ').substring(0, 150)}...`);
+        const child = spawn(cmd, fullArgs, { shell: isWin });
 
         let stdout = '';
         let stderr = '';
@@ -95,7 +90,7 @@ function getPlatformArgsArray(url, clientMode = 'android') {
 app.get('/health', (req, res) => {
     res.json({
         status: 'ok',
-        yt_dlp_bin: ytdlpBin,
+        yt_dlp_bin: 'python -m yt_dlp',
         time: new Date()
     });
 });
@@ -116,7 +111,7 @@ app.post('/api/download', async (req, res) => {
         const timestamp = Date.now();
         const downloadedFilePath = path.join(tempDir, `raw_${timestamp}.media`);
 
-        // Step 1: Metadata extraction (android client first)
+        // Step 1: Metadata extraction
         let info = null;
         try {
             const jsonOutput = await runYtDlp([url, '--dump-json', ...getPlatformArgsArray(url, 'android')]);
@@ -150,7 +145,7 @@ app.post('/api/download', async (req, res) => {
         const targetTotalBitrate = Math.floor((targetSize * 8) / duration);
         const finalFilePath = path.join(tempDir, `processed_${timestamp}.${extension}`);
 
-        // Step 2: Stream Download (android client first)
+        // Step 2: Stream Download
         const downloadArgs = [
             url,
             '-o', downloadedFilePath,
