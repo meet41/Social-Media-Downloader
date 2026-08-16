@@ -47,10 +47,9 @@ if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true });
 }
 
-// Check for cookies file (supports cookies.txt or YOUTUBE_COOKIES env var on Render)
 const cookiesFile = path.join(__dirname, 'cookies.txt');
 
-if (process.env.YOUTUBE_COOKIES && !fs.existsSync(cookiesFile)) {
+if (process.env.YOUTUBE_COOKIES) {
     try {
         fs.writeFileSync(cookiesFile, process.env.YOUTUBE_COOKIES, 'utf8');
         console.log("Loaded cookies from YOUTUBE_COOKIES environment variable.");
@@ -69,7 +68,7 @@ function sanitizeFilename(name) {
         .substring(0, 100);
 }
 
-function getPlatformArgs(url, clientType = 'default') {
+function getPlatformArgs(url) {
     const isYouTube = /youtu(\.be|be\.com)/i.test(url);
     const isFacebook = /facebook\.com|fb\.watch/i.test(url);
     const isInstagram = /instagram\.com/i.test(url);
@@ -81,16 +80,7 @@ function getPlatformArgs(url, clientType = 'default') {
     }
 
     if (isYouTube) {
-        if (clientType === 'ios') {
-            args += ` --extractor-args "youtube:player_client=ios" --add-header "user-agent:Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"`;
-        } else if (clientType === 'android') {
-            args += ` --extractor-args "youtube:player_client=android" --add-header "user-agent:Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"`;
-        } else if (clientType === 'mweb') {
-            args += ` --extractor-args "youtube:player_client=mweb" --add-header "user-agent:Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"`;
-        } else {
-            args += ` --extractor-args "youtube:player_client=ios,android,mweb"`;
-        }
-        args += ` --add-header "accept-language:en-US,en;q=0.9"`;
+        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" --add-header "accept-language:en-US,en;q=0.9"`;
     } else if (isFacebook) {
         args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" --add-header "referer:https://www.facebook.com/"`;
     } else if (isInstagram) {
@@ -116,21 +106,14 @@ app.post('/api/download', async (req, res) => {
     try {
         console.log(`Processing media request for: ${url}`);
 
-        const isYouTube = /youtu(\.be|be\.com)/i.test(url);
-        let platformArgs = getPlatformArgs(url, 'default');
+        const platformArgs = getPlatformArgs(url);
 
         let info = null;
-        const clientFallbacks = isYouTube ? ['default', 'ios', 'android', 'mweb'] : ['default'];
-
-        for (const client of clientFallbacks) {
-            try {
-                platformArgs = getPlatformArgs(url, client);
-                const jsonOutput = await runYtDlp(`"${url}" --dump-json ${platformArgs}`);
-                info = JSON.parse(jsonOutput);
-                if (info) break;
-            } catch (err) {
-                console.warn(`Extraction attempt with client '${client}' failed:`, err.message.substring(0, 120));
-            }
+        try {
+            const jsonOutput = await runYtDlp(`"${url}" --dump-json ${platformArgs}`);
+            info = JSON.parse(jsonOutput);
+        } catch (metaErr) {
+            console.warn("Direct dump-json failed, proceeding with default estimation...", metaErr.message);
         }
 
         const rawTitle = (info && (info.title || info.fulltitle)) || 'download';
@@ -156,30 +139,16 @@ app.post('/api/download', async (req, res) => {
         const rawFilePath = path.join(tempDir, `raw_${timestamp}.%(ext)s`);
         const finalFilePath = path.join(tempDir, `processed_${timestamp}.${extension}`);
 
-        // Flexible fallback formats to ensure yt-dlp always finds a match
-        const downloadFormat = format === 'audio' 
-            ? 'bestaudio/best[height<=480]/best' 
-            : 'bestvideo[height<=720]+bestaudio/best[height<=720]/bestvideo+bestaudio/best';
+        // Matches exactly what worked locally: format "best" or "bestaudio"
+        const downloadFormat = format === 'audio' ? 'bestaudio' : 'best';
+        console.log(`Downloading stream from source with format: ${downloadFormat}...`);
 
-        console.log("Downloading stream from source...");
-
-        let downloadSuccess = false;
-        let lastDownloadError = null;
-
-        for (const client of clientFallbacks) {
-            try {
-                const currentArgs = getPlatformArgs(url, client);
-                await runYtDlp(`"${url}" -o "${rawFilePath}" -f "${downloadFormat}" ${currentArgs}`);
-                downloadSuccess = true;
-                break;
-            } catch (dlErr) {
-                lastDownloadError = dlErr;
-                console.warn(`Download with client '${client}' failed, trying next fallback...`);
-            }
-        }
-
-        if (!downloadSuccess) {
-            throw lastDownloadError || new Error("Failed to download video stream from source.");
+        try {
+            await runYtDlp(`"${url}" -o "${rawFilePath}" -f "${downloadFormat}" ${platformArgs}`);
+        } catch (firstErr) {
+            console.warn(`Primary format '${downloadFormat}' failed, falling back to universal default...`);
+            // Universal fallback without strict format constraints
+            await runYtDlp(`"${url}" -o "${rawFilePath}" ${platformArgs}`);
         }
 
         const files = fs.readdirSync(tempDir);
