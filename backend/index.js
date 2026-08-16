@@ -141,7 +141,7 @@ app.post('/api/download', async (req, res) => {
         const finalFilePath = path.join(tempDir, `processed_${timestamp}.${extension}`);
 
         // Step 2: Media Stream Download
-        const downloadFormat = format === 'audio' ? 'ba/b' : 'b/bv*+ba';
+        const downloadFormat = 'b/bv*+ba/ba/best';
         console.log(`[Download] Downloading stream format '${downloadFormat}'...`);
 
         let downloadSuccess = false;
@@ -195,7 +195,7 @@ app.post('/api/download', async (req, res) => {
         let ffmpegCmd = '';
         if (format === 'audio') {
             const audioBitrate = Math.max(targetTotalBitrate, 32000);
-            ffmpegCmd = `"${ffmpegPath}" -y -i "${downloadedFilePath}" -b:a ${audioBitrate} -vn "${finalFilePath}"`;
+            ffmpegCmd = `"${ffmpegPath}" -y -i "${downloadedFilePath}" -b:a ${audioBitrate} -c:a mp3 -vn "${finalFilePath}"`;
         } else {
             let audioBitrate = 64000;
             let videoBitrate = targetTotalBitrate - audioBitrate;
