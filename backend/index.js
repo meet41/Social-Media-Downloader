@@ -1,6 +1,6 @@
 ﻿const express = require('express');
 const cors = require('cors');
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -22,9 +22,14 @@ if (fs.existsSync(localYtDlp)) {
     ytdlpBin = localYtDlp;
 }
 
+// POT provider base URL (runs as sidecar on same container)
+const POT_BASE_URL = process.env.POT_BASE_URL || 'http://127.0.0.1:4416';
+
 function runYtDlp(args) {
     return new Promise((resolve, reject) => {
-        exec(`"${ytdlpBin}" ${args}`, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
+        const cmd = `"${ytdlpBin}" ${args}`;
+        console.log(`[yt-dlp] Running: ${cmd.substring(0, 200)}...`);
+        exec(cmd, { maxBuffer: 1024 * 1024 * 50, timeout: 120000 }, (error, stdout, stderr) => {
             if (error) {
                 return reject(new Error(stderr || stdout || error.message));
             }
@@ -80,32 +85,30 @@ function sanitizeFilename(name) {
         .substring(0, 100);
 }
 
-function getPlatformArgs(url, mode = 'cookies') {
+function getBaseArgs(url) {
     const isYouTube = /youtu(\.be|be\.com)/i.test(url);
     const isFacebook = /facebook\.com|fb\.watch/i.test(url);
     const isInstagram = /instagram\.com/i.test(url);
 
-    let args = `--no-warnings`;
+    let args = `--no-warnings --no-check-certificates`;
 
+    // Always pass cookies if available
     const hasCookies = syncCookies();
-    if (hasCookies && mode === 'cookies') {
+    if (hasCookies) {
         args += ` --cookies "${cookiesFile}"`;
     }
 
     if (isYouTube) {
-        if (mode === 'android') {
-            args += ` --extractor-args "youtube:player_client=android,web" --add-header "user-agent:com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip"`;
-        } else if (mode === 'ios') {
-            args += ` --extractor-args "youtube:player_client=ios,mweb" --add-header "user-agent:Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15"`;
-        } else if (mode === 'tv') {
-            args += ` --extractor-args "youtube:player_client=tv_embedded,tv"`;
-        } else {
-            args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36" --add-header "accept-language:en-US,en;q=0.9"`;
-        }
+        // Use POT provider for YouTube to bypass bot detection on datacenter IPs
+        args += ` --extractor-args "youtubepot-bgutilhttp:base_url=${POT_BASE_URL}"`;
+        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
+        args += ` --add-header "accept-language:en-US,en;q=0.9"`;
     } else if (isFacebook) {
-        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36" --add-header "referer:https://www.facebook.com/"`;
+        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
+        args += ` --add-header "referer:https://www.facebook.com/"`;
     } else if (isInstagram) {
-        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36" --add-header "referer:https://www.instagram.com/"`;
+        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
+        args += ` --add-header "referer:https://www.instagram.com/"`;
     } else {
         args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
     }
@@ -113,9 +116,46 @@ function getPlatformArgs(url, mode = 'cookies') {
     return args;
 }
 
-app.get('/health', (req, res) => {
+// Fallback args without POT (for non-YouTube or if POT fails)
+function getFallbackArgs(url) {
+    let args = `--no-warnings --no-check-certificates`;
+
     const hasCookies = syncCookies();
-    res.json({ status: 'ok', cookies_loaded: hasCookies, time: new Date() });
+    if (hasCookies) {
+        args += ` --cookies "${cookiesFile}"`;
+    }
+
+    args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
+
+    return args;
+}
+
+app.get('/health', async (req, res) => {
+    const hasCookies = syncCookies();
+
+    // Check if POT provider is running
+    let potStatus = 'unknown';
+    try {
+        const http = require('http');
+        await new Promise((resolve, reject) => {
+            const potReq = http.get(POT_BASE_URL, { timeout: 2000 }, (potRes) => {
+                potStatus = `running (status ${potRes.statusCode})`;
+                resolve();
+            });
+            potReq.on('error', () => { potStatus = 'not running'; resolve(); });
+            potReq.on('timeout', () => { potStatus = 'timeout'; potReq.destroy(); resolve(); });
+        });
+    } catch (e) {
+        potStatus = 'error';
+    }
+
+    res.json({
+        status: 'ok',
+        cookies_loaded: hasCookies,
+        pot_provider: potStatus,
+        yt_dlp_bin: ytdlpBin,
+        time: new Date()
+    });
 });
 
 app.post('/api/download', async (req, res) => {
@@ -126,27 +166,29 @@ app.post('/api/download', async (req, res) => {
     }
 
     try {
+        console.log(`\n========================================`);
         console.log(`Processing media request for: ${url}`);
+        console.log(`Format: ${format}`);
+        console.log(`========================================`);
 
-        const isYouTube = /youtu(\.be|be\.com)/i.test(url);
-        // Cascade modes: Cookies -> Android client -> iOS client -> TV client -> Generic
-        const modes = isYouTube ? ['cookies', 'android', 'ios', 'tv', 'generic'] : ['cookies'];
+        const baseArgs = getBaseArgs(url);
+        const fallbackArgs = getFallbackArgs(url);
 
+        // Step 1: Extract metadata
         let info = null;
-        let successfulMode = 'cookies';
-
-        for (const mode of modes) {
+        try {
+            console.log(`[Step 1] Extracting metadata with POT...`);
+            const jsonOutput = await runYtDlp(`"${url}" --dump-json ${baseArgs}`);
+            info = JSON.parse(jsonOutput);
+            console.log(`[Step 1] Metadata extracted successfully.`);
+        } catch (metaErr) {
+            console.warn(`[Step 1] POT metadata failed, trying fallback...`, metaErr.message ? metaErr.message.substring(0, 150) : '');
             try {
-                const platformArgs = getPlatformArgs(url, mode);
-                const jsonOutput = await runYtDlp(`"${url}" --dump-json ${platformArgs}`);
+                const jsonOutput = await runYtDlp(`"${url}" --dump-json ${fallbackArgs}`);
                 info = JSON.parse(jsonOutput);
-                if (info) {
-                    successfulMode = mode;
-                    console.log(`Successfully extracted metadata using mode: '${mode}'`);
-                    break;
-                }
-            } catch (metaErr) {
-                console.warn(`Extraction mode '${mode}' failed:`, metaErr.message ? metaErr.message.substring(0, 100) : '');
+                console.log(`[Step 1] Fallback metadata extracted successfully.`);
+            } catch (fb) {
+                console.warn(`[Step 1] All metadata extraction failed. Proceeding with defaults.`);
             }
         }
 
@@ -159,11 +201,11 @@ app.post('/api/download', async (req, res) => {
         let originalSize = info ? (info.filesize || info.filesize_approx) : null;
 
         if (!originalSize) {
-            console.log("Could not determine exact filesize from metadata. Estimating...");
+            console.log("[Info] Estimating file size from duration...");
             originalSize = (format === 'audio' ? 2 * 1024 * 1024 : 10 * 1024 * 1024) * (duration / 60);
         }
 
-        console.log(`Title: "${safeTitle}", Duration: ${duration}s, Original Size: ${originalSize} bytes`);
+        console.log(`Title: "${safeTitle}", Duration: ${duration}s, Est. Size: ${originalSize} bytes`);
 
         // Target: 50% size reduction
         const targetSize = Math.max(originalSize / 2, 500 * 1024);
@@ -173,34 +215,55 @@ app.post('/api/download', async (req, res) => {
         const rawFilePath = path.join(tempDir, `raw_${timestamp}.%(ext)s`);
         const finalFilePath = path.join(tempDir, `processed_${timestamp}.${extension}`);
 
+        // Step 2: Download stream
         const downloadFormat = format === 'audio' ? 'ba/b' : 'bv*+ba/b';
-        console.log(`Downloading stream with format '${downloadFormat}' using mode '${successfulMode}'...`);
+        console.log(`[Step 2] Downloading with format '${downloadFormat}'...`);
 
-        let downloadSuccess = false;
-        let lastError = null;
+        let downloaded = false;
 
-        // Try downloading with successful mode, then fallback to other modes if necessary
-        const dlModes = [successfulMode, ...modes.filter(m => m !== successfulMode)];
-
-        for (const dlMode of dlModes) {
+        // Try 1: With POT + format
+        if (!downloaded) {
             try {
-                const currentArgs = getPlatformArgs(url, dlMode);
-                try {
-                    await runYtDlp(`"${url}" -o "${rawFilePath}" -f "${downloadFormat}" ${currentArgs}`);
-                } catch (fErr) {
-                    await runYtDlp(`"${url}" -o "${rawFilePath}" ${currentArgs}`);
-                }
-                downloadSuccess = true;
-                console.log(`Download stream successful using mode: '${dlMode}'`);
-                break;
-            } catch (err) {
-                lastError = err;
-                console.warn(`Download mode '${dlMode}' failed, trying next...`);
+                await runYtDlp(`"${url}" -o "${rawFilePath}" -f "${downloadFormat}" ${baseArgs}`);
+                downloaded = true;
+                console.log(`[Step 2] Download successful (POT + format).`);
+            } catch (e) {
+                console.warn(`[Step 2] POT + format failed: ${e.message ? e.message.substring(0, 100) : ''}`);
             }
         }
 
-        if (!downloadSuccess) {
-            throw lastError || new Error("Failed to download video stream.");
+        // Try 2: With POT, no format constraint
+        if (!downloaded) {
+            try {
+                await runYtDlp(`"${url}" -o "${rawFilePath}" ${baseArgs}`);
+                downloaded = true;
+                console.log(`[Step 2] Download successful (POT, no format).`);
+            } catch (e) {
+                console.warn(`[Step 2] POT no-format failed: ${e.message ? e.message.substring(0, 100) : ''}`);
+            }
+        }
+
+        // Try 3: Fallback without POT + format
+        if (!downloaded) {
+            try {
+                await runYtDlp(`"${url}" -o "${rawFilePath}" -f "${downloadFormat}" ${fallbackArgs}`);
+                downloaded = true;
+                console.log(`[Step 2] Download successful (fallback + format).`);
+            } catch (e) {
+                console.warn(`[Step 2] Fallback + format failed: ${e.message ? e.message.substring(0, 100) : ''}`);
+            }
+        }
+
+        // Try 4: Fallback without POT, no format
+        if (!downloaded) {
+            try {
+                await runYtDlp(`"${url}" -o "${rawFilePath}" ${fallbackArgs}`);
+                downloaded = true;
+                console.log(`[Step 2] Download successful (fallback, no format).`);
+            } catch (e) {
+                console.warn(`[Step 2] All download attempts failed.`);
+                throw new Error('Unable to download this video. YouTube may be blocking this server. Please try again later.');
+            }
         }
 
         const files = fs.readdirSync(tempDir);
@@ -211,7 +274,10 @@ app.post('/api/download', async (req, res) => {
         }
 
         const downloadedFilePath = path.join(tempDir, downloadedFile);
-        console.log(`Downloaded to ${downloadedFilePath}. Starting FFmpeg compression...`);
+        console.log(`[Step 2] Downloaded: ${downloadedFilePath}`);
+
+        // Step 3: Compress with FFmpeg
+        console.log(`[Step 3] Starting FFmpeg compression...`);
 
         let ffmpegCmd = '';
         if (format === 'audio') {
@@ -225,14 +291,14 @@ app.post('/api/download', async (req, res) => {
             ffmpegCmd = `"${ffmpegPath}" -y -i "${downloadedFilePath}" -vf "scale=trunc(oh*a/2)*2:480" -c:v libx264 -preset fast -b:v ${videoBitrate} -b:a ${audioBitrate} -c:a aac "${finalFilePath}"`;
         }
 
-        exec(ffmpegCmd, (error, stdout, stderr) => {
+        exec(ffmpegCmd, { timeout: 300000 }, (error, stdout, stderr) => {
             if (error) {
-                console.error(`ffmpeg error: ${error.message}`);
-                console.error(`ffmpeg stderr: ${stderr}`);
+                console.error(`[Step 3] ffmpeg error: ${error.message}`);
+                console.error(`[Step 3] ffmpeg stderr: ${stderr}`);
                 return res.status(500).json({ error: 'Media compression failed.' });
             }
 
-            console.log(`Compression successful: ${finalFilePath}`);
+            console.log(`[Step 3] Compression successful: ${finalFilePath}`);
 
             const encodedFilename = encodeURIComponent(finalDownloadName);
             res.setHeader('Content-Disposition', `attachment; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`);
@@ -265,4 +331,5 @@ app.post('/api/download', async (req, res) => {
 
 app.listen(port, () => {
     console.log(`Production backend running on port ${port}`);
+    console.log(`POT provider expected at: ${POT_BASE_URL}`);
 });
