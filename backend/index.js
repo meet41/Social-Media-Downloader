@@ -185,7 +185,8 @@ app.post('/api/download', async (req, res) => {
 
         if (!downloadSuccess || !downloadedFile) {
             const allFiles = fs.readdirSync(tempDir);
-            throw lastError || new Error(`Downloaded file raw_${timestamp} not found in temp. Available: ${allFiles.join(', ')}`);
+            const detailMsg = lastError ? lastError.message : 'No error message caught';
+            throw new Error(`Download failed (${detailMsg}). Temp files: ${allFiles.join(', ')}`);
         }
 
         const downloadedFilePath = path.join(tempDir, downloadedFile);
