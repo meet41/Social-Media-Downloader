@@ -4,28 +4,13 @@ const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-// Determine ffmpeg binary path
-let ffmpegPath = 'ffmpeg';
-try {
-    const installer = require('@ffmpeg-installer/ffmpeg');
-    if (installer && installer.path && fs.existsSync(installer.path)) {
-        ffmpegPath = installer.path;
-    }
-} catch (e) {
-    ffmpegPath = 'ffmpeg';
-}
-
-// Determine yt-dlp binary
-let ytdlpBin = 'yt-dlp';
-const localYtDlp = path.join(__dirname, 'node_modules', 'yt-dlp-exec', 'bin', 'yt-dlp.exe');
-if (fs.existsSync(localYtDlp)) {
-    ytdlpBin = localYtDlp;
-}
+const ffmpegPath = 'ffmpeg';
+const ytdlpBin = 'yt-dlp';
 
 function runYtDlp(args) {
     return new Promise((resolve, reject) => {
         const cmd = `"${ytdlpBin}" ${args}`;
-        console.log(`[yt-dlp] Executing command...`);
+        console.log(`[yt-dlp] Running command...`);
         exec(cmd, { maxBuffer: 1024 * 1024 * 50, timeout: 180000 }, (error, stdout, stderr) => {
             if (error) {
                 return reject(new Error(stderr || stdout || error.message));

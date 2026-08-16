@@ -1,23 +1,19 @@
 ﻿FROM node:20-bookworm-slim
 
-# Install system dependencies: python3, pip, ffmpeg, curl
+# Install system dependencies: python3, ffmpeg, curl
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        python3 python3-pip python3-venv \
-        ffmpeg curl ca-certificates && \
+    apt-get install -y --no-install-recommends python3 ffmpeg curl ca-certificates && \
+    curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
+    chmod a+rx /usr/local/bin/yt-dlp && \
     rm -rf /var/lib/apt/lists/*
-
-# Install latest yt-dlp binary globally
-RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
-    chmod a+rx /usr/local/bin/yt-dlp
 
 WORKDIR /app
 
-# Copy package files and install production dependencies
+# Copy package.json and install express + cors
 COPY package*.json ./
-RUN npm install --omit=dev 2>/dev/null || (npm init -y && npm install express cors)
+RUN npm install --production
 
-# Copy backend application files
+# Copy application files
 COPY . .
 
 ENV PORT=3001
