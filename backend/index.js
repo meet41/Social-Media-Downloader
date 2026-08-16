@@ -104,15 +104,15 @@ function getPlatformArgs(url, clientMode = 'cookies_web') {
 
     if (isYouTube) {
         if (clientMode === 'cookies_web' && hasCookies) {
-            args += ` --cookies "${cookiesFile}" --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
+            args += ` --cookies "${cookiesFile}"`;
         } else if (clientMode === 'cookies_android' && hasCookies) {
-            args += ` --cookies "${cookiesFile}" --extractor-args "youtube:player_client=android" --add-header "user-agent:com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip"`;
+            args += ` --cookies "${cookiesFile}" --extractor-args "youtube:player_client=android"`;
         } else if (clientMode === 'no_cookies_android') {
-            args += ` --no-cookies --extractor-args "youtube:player_client=android" --add-header "user-agent:com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip"`;
+            args += ` --no-cookies --extractor-args "youtube:player_client=android"`;
         } else if (clientMode === 'no_cookies_mweb') {
-            args += ` --no-cookies --extractor-args "youtube:player_client=mweb" --add-header "user-agent:Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15"`;
+            args += ` --no-cookies --extractor-args "youtube:player_client=mweb"`;
         } else {
-            args += ` --no-cookies --extractor-args "youtube:player_client=android" --add-header "user-agent:com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip"`;
+            args += ` --no-cookies --extractor-args "youtube:player_client=android"`;
         }
     } else if (isFacebook) {
         if (hasCookies) args += ` --cookies "${cookiesFile}"`;
