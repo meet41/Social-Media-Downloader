@@ -1,23 +1,32 @@
 ﻿const express = require('express');
 const cors = require('cors');
-const { exec } = require('child_process');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
 const ffmpegPath = 'ffmpeg';
 const ytdlpBin = 'yt-dlp';
 
-function runYtDlp(args) {
+function runYtDlp(argsArray) {
     return new Promise((resolve, reject) => {
-        const cmd = `"${ytdlpBin}" ${args}`;
-        console.log(`[yt-dlp] Executing: ${cmd.substring(0, 180)}...`);
-        exec(cmd, { maxBuffer: 1024 * 1024 * 50, timeout: 180000 }, (error, stdout, stderr) => {
-            if (error && (!stdout || !stdout.trim())) {
-                console.error(`[yt-dlp error] Stderr:`, stderr ? stderr.substring(0, 300) : error.message);
-                return reject(new Error(stderr || error.message));
+        console.log(`[yt-dlp] Spawning: ${ytdlpBin} ${argsArray.join(' ').substring(0, 150)}...`);
+        const child = spawn(ytdlpBin, argsArray);
+
+        let stdout = '';
+        let stderr = '';
+
+        child.stdout.on('data', data => { stdout += data.toString(); });
+        child.stderr.on('data', data => { stderr += data.toString(); });
+
+        child.on('close', code => {
+            if (code !== 0 && (!stdout || !stdout.trim())) {
+                console.error(`[yt-dlp error] Code: ${code}, Stderr:`, stderr.substring(0, 300));
+                return reject(new Error(stderr || `yt-dlp process exited with code ${code}`));
             }
             resolve(stdout);
         });
+
+        child.on('error', err => reject(err));
     });
 }
 
@@ -44,30 +53,21 @@ function sanitizeFilename(name) {
     return cleaned.substring(0, 80) || 'media';
 }
 
-function getPlatformArgs(url, clientMode = 'android') {
+function getPlatformArgsArray(url, clientMode = 'mweb') {
     const isYouTube = /youtu(\.be|be\.com)/i.test(url);
-    const isFacebook = /facebook\.com|fb\.watch/i.test(url);
-    const isInstagram = /instagram\.com/i.test(url);
-
-    let args = `--no-warnings --no-check-certificates`;
+    const args = ['--no-warnings', '--no-check-certificates'];
 
     if (isYouTube) {
-        args += ` --no-cookies`;
-        if (clientMode === 'android') {
-            args += ` --extractor-args "youtube:player_client=android,mweb,ios"`;
-        } else if (clientMode === 'mweb') {
-            args += ` --extractor-args "youtube:player_client=mweb,android"`;
+        args.push('--no-cookies');
+        if (clientMode === 'mweb') {
+            args.push('--extractor-args', 'youtube:player_client=mweb,android');
+        } else if (clientMode === 'android') {
+            args.push('--extractor-args', 'youtube:player_client=android,mweb');
         } else {
-            args += ` --extractor-args "youtube:player_client=android,mweb"`;
+            args.push('--extractor-args', 'youtube:player_client=mweb,android,web_creator');
         }
-    } else if (isFacebook) {
-        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
-        args += ` --add-header "referer:https://www.facebook.com/"`;
-    } else if (isInstagram) {
-        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
-        args += ` --add-header "referer:https://www.instagram.com/"`;
     } else {
-        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
+        args.push('--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36');
     }
 
     return args;
@@ -94,25 +94,21 @@ app.post('/api/download', async (req, res) => {
         console.log(`========================================`);
 
         const isYouTube = /youtu(\.be|be\.com)/i.test(url);
-        const modes = isYouTube ? ['android', 'mweb'] : ['default'];
-
-        let info = null;
-        let successfulMode = modes[0];
+        const timestamp = Date.now();
+        const downloadedFilePath = path.join(tempDir, `raw_${timestamp}.media`);
 
         // Step 1: Metadata extraction
-        for (const mode of modes) {
+        let info = null;
+        try {
+            const jsonOutput = await runYtDlp([url, '--dump-json', ...getPlatformArgsArray(url, 'mweb')]);
+            info = JSON.parse(jsonOutput);
+        } catch (e) {
+            console.warn('[Metadata] mweb mode notice, falling back:', e.message ? e.message.substring(0, 100) : '');
             try {
-                const platformArgs = getPlatformArgs(url, mode);
-                console.log(`[Metadata] Trying mode '${mode}'...`);
-                const jsonOutput = await runYtDlp(`"${url}" --dump-json ${platformArgs}`);
+                const jsonOutput = await runYtDlp([url, '--dump-json', ...getPlatformArgsArray(url, 'android')]);
                 info = JSON.parse(jsonOutput);
-                if (info) {
-                    successfulMode = mode;
-                    console.log(`[Metadata] Success with mode '${mode}'`);
-                    break;
-                }
-            } catch (err) {
-                console.warn(`[Metadata] Mode '${mode}' failed:`, err.message ? err.message.substring(0, 120) : '');
+            } catch (err2) {
+                console.warn('[Metadata] android fallback notice:', err2.message ? err2.message.substring(0, 100) : '');
             }
         }
 
@@ -125,80 +121,65 @@ app.post('/api/download', async (req, res) => {
         let originalSize = info ? (info.filesize || info.filesize_approx) : null;
 
         if (!originalSize) {
-            console.log("[Info] Estimating filesize...");
+            console.log('[Info] Estimating filesize...');
             originalSize = (format === 'audio' ? 2 * 1024 * 1024 : 10 * 1024 * 1024) * (duration / 60);
         }
 
         console.log(`Title: "${safeTitle}", Duration: ${duration}s, Est Size: ${originalSize} bytes`);
 
-        // Target 50% size reduction
         const targetSize = Math.max(originalSize / 2, 500 * 1024);
         const targetTotalBitrate = Math.floor((targetSize * 8) / duration);
-
-        const timestamp = Date.now();
-        const downloadedFilePath = path.join(tempDir, `raw_${timestamp}.media`);
         const finalFilePath = path.join(tempDir, `processed_${timestamp}.${extension}`);
 
-        // Step 2: Media Stream Download
-        const downloadFormat = 'b/bv*+ba/ba/best';
-        console.log(`[Download] Downloading stream format '${downloadFormat}'...`);
+        // Step 2: Stream Download using spawn and --no-part
+        const downloadArgs = [
+            url,
+            '-o', downloadedFilePath,
+            '-f', 'b/best[height<=480]/best',
+            '--no-part',
+            ...getPlatformArgsArray(url, 'mweb')
+        ];
 
-        let downloadSuccess = false;
-        let lastError = null;
-
-        const dlModes = [successfulMode, ...modes.filter(m => m !== successfulMode)];
-
-        for (const dlMode of dlModes) {
-            try {
-                const currentArgs = getPlatformArgs(url, dlMode);
-                console.log(`[Download] Attempting download with mode '${dlMode}'...`);
-
-                try {
-                    await runYtDlp(`"${url}" -o "${downloadedFilePath}" -f "${downloadFormat}" ${currentArgs}`);
-                } catch (fErr) {
-                    console.warn(`[Download] Format-constrained attempt failed, retrying unconstrained...`);
-                    await runYtDlp(`"${url}" -o "${downloadedFilePath}" ${currentArgs}`);
-                }
-
-                if (fs.existsSync(downloadedFilePath) && fs.statSync(downloadedFilePath).size > 0) {
-                    downloadSuccess = true;
-                    console.log(`[Download] Stream saved directly to: ${downloadedFilePath}`);
-                    break;
-                }
-            } catch (err) {
-                lastError = err;
-                console.warn(`[Download] Mode '${dlMode}' notice:`, err.message ? err.message.substring(0, 120) : '');
-
-                if (fs.existsSync(downloadedFilePath) && fs.statSync(downloadedFilePath).size > 0) {
-                    downloadSuccess = true;
-                    console.log(`[Download] Stream saved directly to: ${downloadedFilePath}`);
-                    break;
-                }
-            }
+        console.log(`[Download] Downloading stream...`);
+        try {
+            await runYtDlp(downloadArgs);
+        } catch (dlErr) {
+            console.warn('[Download] Retrying with android client...', dlErr.message ? dlErr.message.substring(0, 100) : '');
+            const fallbackArgs = [
+                url,
+                '-o', downloadedFilePath,
+                '-f', 'b/best[height<=480]/best',
+                '--no-part',
+                ...getPlatformArgsArray(url, 'android')
+            ];
+            await runYtDlp(fallbackArgs);
         }
 
-        if (!downloadSuccess || !fs.existsSync(downloadedFilePath)) {
-            throw lastError || new Error("Failed to download media stream file.");
+        if (!fs.existsSync(downloadedFilePath) || fs.statSync(downloadedFilePath).size === 0) {
+            throw new Error('Failed to download media stream to server disk.');
         }
 
         console.log(`[FFmpeg] Processing ${downloadedFilePath}...`);
 
-        let ffmpegCmd = '';
+        let ffmpegArgs = [];
         if (format === 'audio') {
             const audioBitrate = Math.max(targetTotalBitrate, 32000);
-            ffmpegCmd = `"${ffmpegPath}" -y -i "${downloadedFilePath}" -b:a ${audioBitrate} -c:a mp3 -vn "${finalFilePath}"`;
+            ffmpegArgs = ['-y', '-i', downloadedFilePath, '-b:a', `${audioBitrate}`, '-c:a', 'mp3', '-vn', finalFilePath];
         } else {
             let audioBitrate = 64000;
-            let videoBitrate = targetTotalBitrate - audioBitrate;
-            if (videoBitrate < 100000) videoBitrate = 150000;
-
-            ffmpegCmd = `"${ffmpegPath}" -y -i "${downloadedFilePath}" -vf "scale=trunc(oh*a/2)*2:480" -c:v libx264 -preset fast -b:v ${videoBitrate} -b:a ${audioBitrate} -c:a aac "${finalFilePath}"`;
+            let videoBitrate = Math.max(targetTotalBitrate - audioBitrate, 150000);
+            ffmpegArgs = ['-y', '-i', downloadedFilePath, '-vf', 'scale=trunc(oh*a/2)*2:480', '-c:v', 'libx264', '-preset', 'fast', '-b:v', `${videoBitrate}`, '-b:a', `${audioBitrate}`, '-c:a', 'aac', finalFilePath];
         }
 
-        exec(ffmpegCmd, { timeout: 300000 }, (error, stdout, stderr) => {
-            if (error) {
-                console.error(`[FFmpeg] Error: ${error.message}`);
-                return res.status(500).json({ error: `Media compression failed: ${error.message}` });
+        const ffmpegChild = spawn(ffmpegPath, ffmpegArgs);
+        let ffmpegErr = '';
+
+        ffmpegChild.stderr.on('data', data => { ffmpegErr += data.toString(); });
+
+        ffmpegChild.on('close', code => {
+            if (code !== 0 || !fs.existsSync(finalFilePath)) {
+                console.error(`[FFmpeg Error] Code ${code}:`, ffmpegErr.substring(0, 300));
+                return res.status(500).json({ error: `FFmpeg compression failed with code ${code}` });
             }
 
             console.log(`[FFmpeg] Compression completed: ${finalFilePath}`);
