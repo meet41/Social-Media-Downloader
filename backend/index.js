@@ -1,6 +1,6 @@
 ﻿const express = require('express');
 const cors = require('cors');
-const { exec, spawn } = require('child_process');
+const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -22,14 +22,11 @@ if (fs.existsSync(localYtDlp)) {
     ytdlpBin = localYtDlp;
 }
 
-// POT provider base URL (runs as sidecar on same container)
-const POT_BASE_URL = process.env.POT_BASE_URL || 'http://127.0.0.1:4416';
-
 function runYtDlp(args) {
     return new Promise((resolve, reject) => {
         const cmd = `"${ytdlpBin}" ${args}`;
-        console.log(`[yt-dlp] Running: ${cmd.substring(0, 200)}...`);
-        exec(cmd, { maxBuffer: 1024 * 1024 * 50, timeout: 120000 }, (error, stdout, stderr) => {
+        console.log(`[yt-dlp] Executing command...`);
+        exec(cmd, { maxBuffer: 1024 * 1024 * 50, timeout: 180000 }, (error, stdout, stderr) => {
             if (error) {
                 return reject(new Error(stderr || stdout || error.message));
             }
@@ -85,22 +82,26 @@ function sanitizeFilename(name) {
         .substring(0, 100);
 }
 
-function getBaseArgs(url) {
+function getPlatformArgs(url, clientMode = 'mobile_cascade') {
     const isYouTube = /youtu(\.be|be\.com)/i.test(url);
     const isFacebook = /facebook\.com|fb\.watch/i.test(url);
     const isInstagram = /instagram\.com/i.test(url);
 
     let args = `--no-warnings --no-check-certificates`;
 
-    // Always pass cookies if available
     const hasCookies = syncCookies();
     if (hasCookies) {
         args += ` --cookies "${cookiesFile}"`;
     }
 
     if (isYouTube) {
-        // Use POT provider for YouTube to bypass bot detection on datacenter IPs
-        args += ` --extractor-args "youtubepot-bgutilhttp:base_url=${POT_BASE_URL}"`;
+        if (clientMode === 'mobile_cascade') {
+            args += ` --extractor-args "youtube:player_client=mweb,android,ios"`;
+        } else if (clientMode === 'tv_cascade') {
+            args += ` --extractor-args "youtube:player_client=tv_embedded,tv,mweb"`;
+        } else if (clientMode === 'web_cascade') {
+            args += ` --extractor-args "youtube:player_client=web_embedded,web"`;
+        }
         args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
         args += ` --add-header "accept-language:en-US,en;q=0.9"`;
     } else if (isFacebook) {
@@ -116,43 +117,11 @@ function getBaseArgs(url) {
     return args;
 }
 
-// Fallback args without POT (for non-YouTube or if POT fails)
-function getFallbackArgs(url) {
-    let args = `--no-warnings --no-check-certificates`;
-
+app.get('/health', (req, res) => {
     const hasCookies = syncCookies();
-    if (hasCookies) {
-        args += ` --cookies "${cookiesFile}"`;
-    }
-
-    args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
-
-    return args;
-}
-
-app.get('/health', async (req, res) => {
-    const hasCookies = syncCookies();
-
-    // Check if POT provider is running
-    let potStatus = 'unknown';
-    try {
-        const http = require('http');
-        await new Promise((resolve, reject) => {
-            const potReq = http.get(POT_BASE_URL, { timeout: 2000 }, (potRes) => {
-                potStatus = `running (status ${potRes.statusCode})`;
-                resolve();
-            });
-            potReq.on('error', () => { potStatus = 'not running'; resolve(); });
-            potReq.on('timeout', () => { potStatus = 'timeout'; potReq.destroy(); resolve(); });
-        });
-    } catch (e) {
-        potStatus = 'error';
-    }
-
     res.json({
         status: 'ok',
         cookies_loaded: hasCookies,
-        pot_provider: potStatus,
         yt_dlp_bin: ytdlpBin,
         time: new Date()
     });
@@ -167,28 +136,29 @@ app.post('/api/download', async (req, res) => {
 
     try {
         console.log(`\n========================================`);
-        console.log(`Processing media request for: ${url}`);
-        console.log(`Format: ${format}`);
+        console.log(`Processing media request: ${url} (${format})`);
         console.log(`========================================`);
 
-        const baseArgs = getBaseArgs(url);
-        const fallbackArgs = getFallbackArgs(url);
+        const isYouTube = /youtu(\.be|be\.com)/i.test(url);
+        const modes = isYouTube ? ['mobile_cascade', 'tv_cascade', 'web_cascade'] : ['default'];
 
-        // Step 1: Extract metadata
         let info = null;
-        try {
-            console.log(`[Step 1] Extracting metadata with POT...`);
-            const jsonOutput = await runYtDlp(`"${url}" --dump-json ${baseArgs}`);
-            info = JSON.parse(jsonOutput);
-            console.log(`[Step 1] Metadata extracted successfully.`);
-        } catch (metaErr) {
-            console.warn(`[Step 1] POT metadata failed, trying fallback...`, metaErr.message ? metaErr.message.substring(0, 150) : '');
+        let successfulMode = modes[0];
+
+        // Step 1: Metadata extraction
+        for (const mode of modes) {
             try {
-                const jsonOutput = await runYtDlp(`"${url}" --dump-json ${fallbackArgs}`);
+                const platformArgs = getPlatformArgs(url, mode);
+                console.log(`[Metadata] Trying mode '${mode}'...`);
+                const jsonOutput = await runYtDlp(`"${url}" --dump-json ${platformArgs}`);
                 info = JSON.parse(jsonOutput);
-                console.log(`[Step 1] Fallback metadata extracted successfully.`);
-            } catch (fb) {
-                console.warn(`[Step 1] All metadata extraction failed. Proceeding with defaults.`);
+                if (info) {
+                    successfulMode = mode;
+                    console.log(`[Metadata] Success with mode '${mode}'`);
+                    break;
+                }
+            } catch (err) {
+                console.warn(`[Metadata] Mode '${mode}' failed:`, err.message ? err.message.substring(0, 120) : '');
             }
         }
 
@@ -201,13 +171,13 @@ app.post('/api/download', async (req, res) => {
         let originalSize = info ? (info.filesize || info.filesize_approx) : null;
 
         if (!originalSize) {
-            console.log("[Info] Estimating file size from duration...");
+            console.log("[Info] Estimating filesize...");
             originalSize = (format === 'audio' ? 2 * 1024 * 1024 : 10 * 1024 * 1024) * (duration / 60);
         }
 
-        console.log(`Title: "${safeTitle}", Duration: ${duration}s, Est. Size: ${originalSize} bytes`);
+        console.log(`Title: "${safeTitle}", Duration: ${duration}s, Est Size: ${originalSize} bytes`);
 
-        // Target: 50% size reduction
+        // Target 50% size reduction
         const targetSize = Math.max(originalSize / 2, 500 * 1024);
         const targetTotalBitrate = Math.floor((targetSize * 8) / duration);
 
@@ -215,69 +185,49 @@ app.post('/api/download', async (req, res) => {
         const rawFilePath = path.join(tempDir, `raw_${timestamp}.%(ext)s`);
         const finalFilePath = path.join(tempDir, `processed_${timestamp}.${extension}`);
 
-        // Step 2: Download stream
+        // Step 2: Media Stream Download
         const downloadFormat = format === 'audio' ? 'ba/b' : 'bv*+ba/b';
-        console.log(`[Step 2] Downloading with format '${downloadFormat}'...`);
+        console.log(`[Download] Downloading stream format '${downloadFormat}'...`);
 
-        let downloaded = false;
+        let downloadSuccess = false;
+        let lastError = null;
 
-        // Try 1: With POT + format
-        if (!downloaded) {
+        const dlModes = [successfulMode, ...modes.filter(m => m !== successfulMode)];
+
+        for (const dlMode of dlModes) {
             try {
-                await runYtDlp(`"${url}" -o "${rawFilePath}" -f "${downloadFormat}" ${baseArgs}`);
-                downloaded = true;
-                console.log(`[Step 2] Download successful (POT + format).`);
-            } catch (e) {
-                console.warn(`[Step 2] POT + format failed: ${e.message ? e.message.substring(0, 100) : ''}`);
+                const currentArgs = getPlatformArgs(url, dlMode);
+                console.log(`[Download] Attempting download with mode '${dlMode}'...`);
+
+                try {
+                    await runYtDlp(`"${url}" -o "${rawFilePath}" -f "${downloadFormat}" ${currentArgs}`);
+                } catch (fErr) {
+                    console.warn(`[Download] Format-constrained attempt failed, retrying unconstrained...`);
+                    await runYtDlp(`"${url}" -o "${rawFilePath}" ${currentArgs}`);
+                }
+
+                downloadSuccess = true;
+                console.log(`[Download] Stream download completed with mode '${dlMode}'`);
+                break;
+            } catch (err) {
+                lastError = err;
+                console.warn(`[Download] Download mode '${dlMode}' failed:`, err.message ? err.message.substring(0, 120) : '');
             }
         }
 
-        // Try 2: With POT, no format constraint
-        if (!downloaded) {
-            try {
-                await runYtDlp(`"${url}" -o "${rawFilePath}" ${baseArgs}`);
-                downloaded = true;
-                console.log(`[Step 2] Download successful (POT, no format).`);
-            } catch (e) {
-                console.warn(`[Step 2] POT no-format failed: ${e.message ? e.message.substring(0, 100) : ''}`);
-            }
-        }
-
-        // Try 3: Fallback without POT + format
-        if (!downloaded) {
-            try {
-                await runYtDlp(`"${url}" -o "${rawFilePath}" -f "${downloadFormat}" ${fallbackArgs}`);
-                downloaded = true;
-                console.log(`[Step 2] Download successful (fallback + format).`);
-            } catch (e) {
-                console.warn(`[Step 2] Fallback + format failed: ${e.message ? e.message.substring(0, 100) : ''}`);
-            }
-        }
-
-        // Try 4: Fallback without POT, no format
-        if (!downloaded) {
-            try {
-                await runYtDlp(`"${url}" -o "${rawFilePath}" ${fallbackArgs}`);
-                downloaded = true;
-                console.log(`[Step 2] Download successful (fallback, no format).`);
-            } catch (e) {
-                console.warn(`[Step 2] All download attempts failed.`);
-                throw new Error('Unable to download this video. YouTube may be blocking this server. Please try again later.');
-            }
+        if (!downloadSuccess) {
+            throw lastError || new Error("Failed to download media stream.");
         }
 
         const files = fs.readdirSync(tempDir);
         const downloadedFile = files.find(f => f.startsWith(`raw_${timestamp}`));
 
         if (!downloadedFile) {
-            throw new Error("Downloaded media file was not created on the server.");
+            throw new Error("Downloaded file not found on server.");
         }
 
         const downloadedFilePath = path.join(tempDir, downloadedFile);
-        console.log(`[Step 2] Downloaded: ${downloadedFilePath}`);
-
-        // Step 3: Compress with FFmpeg
-        console.log(`[Step 3] Starting FFmpeg compression...`);
+        console.log(`[FFmpeg] Processing ${downloadedFilePath}...`);
 
         let ffmpegCmd = '';
         if (format === 'audio') {
@@ -293,12 +243,11 @@ app.post('/api/download', async (req, res) => {
 
         exec(ffmpegCmd, { timeout: 300000 }, (error, stdout, stderr) => {
             if (error) {
-                console.error(`[Step 3] ffmpeg error: ${error.message}`);
-                console.error(`[Step 3] ffmpeg stderr: ${stderr}`);
+                console.error(`[FFmpeg] Error: ${error.message}`);
                 return res.status(500).json({ error: 'Media compression failed.' });
             }
 
-            console.log(`[Step 3] Compression successful: ${finalFilePath}`);
+            console.log(`[FFmpeg] Compression completed: ${finalFilePath}`);
 
             const encodedFilename = encodeURIComponent(finalDownloadName);
             res.setHeader('Content-Disposition', `attachment; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`);
@@ -331,5 +280,4 @@ app.post('/api/download', async (req, res) => {
 
 app.listen(port, () => {
     console.log(`Production backend running on port ${port}`);
-    console.log(`POT provider expected at: ${POT_BASE_URL}`);
 });
