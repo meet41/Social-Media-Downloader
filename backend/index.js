@@ -44,7 +44,7 @@ function sanitizeFilename(name) {
     return cleaned.substring(0, 80) || 'media';
 }
 
-function getPlatformArgs(url, clientMode = 'tv_embedded') {
+function getPlatformArgs(url, clientMode = 'android') {
     const isYouTube = /youtu(\.be|be\.com)/i.test(url);
     const isFacebook = /facebook\.com|fb\.watch/i.test(url);
     const isInstagram = /instagram\.com/i.test(url);
@@ -52,15 +52,14 @@ function getPlatformArgs(url, clientMode = 'tv_embedded') {
     let args = `--no-warnings --no-check-certificates`;
 
     if (isYouTube) {
-        if (clientMode === 'tv_embedded') {
-            args += ` --extractor-args "youtube:player_client=tv_embedded"`;
-        } else if (clientMode === 'android_vr') {
-            args += ` --extractor-args "youtube:player_client=android_vr"`;
+        if (clientMode === 'android') {
+            args += ` --extractor-args "youtube:player_client=android"`;
         } else if (clientMode === 'mweb') {
             args += ` --extractor-args "youtube:player_client=mweb"`;
-        } else if (clientMode === 'web_embedded') {
-            args += ` --extractor-args "youtube:player_client=web_embedded"`;
+        } else if (clientMode === 'web_creator') {
+            args += ` --extractor-args "youtube:player_client=web_creator"`;
         }
+        args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
     } else if (isFacebook) {
         args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
         args += ` --add-header "referer:https://www.facebook.com/"`;
@@ -95,7 +94,7 @@ app.post('/api/download', async (req, res) => {
         console.log(`========================================`);
 
         const isYouTube = /youtu(\.be|be\.com)/i.test(url);
-        const modes = isYouTube ? ['tv_embedded', 'android_vr', 'mweb', 'web_embedded'] : ['default'];
+        const modes = isYouTube ? ['android', 'mweb', 'web_creator'] : ['default'];
 
         let info = null;
         let successfulMode = modes[0];
