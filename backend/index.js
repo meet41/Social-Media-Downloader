@@ -93,7 +93,7 @@ function sanitizeFilename(name) {
     return cleaned.substring(0, 80) || 'media';
 }
 
-function getPlatformArgs(url, clientMode = 'cookies_web') {
+function getPlatformArgs(url, clientMode = 'android') {
     const isYouTube = /youtu(\.be|be\.com)/i.test(url);
     const isFacebook = /facebook\.com|fb\.watch/i.test(url);
     const isInstagram = /instagram\.com/i.test(url);
@@ -208,6 +208,7 @@ app.post('/api/download', async (req, res) => {
 
         let downloadSuccess = false;
         let lastError = null;
+        let downloadedFile = null;
 
         const dlModes = [successfulMode, ...modes.filter(m => m !== successfulMode)];
 
@@ -223,27 +224,30 @@ app.post('/api/download', async (req, res) => {
                     await runYtDlp(`"${url}" -o "${rawFilePattern}" ${currentArgs}`);
                 }
 
-                downloadSuccess = true;
-                console.log(`[Download] Stream download completed with mode '${dlMode}'`);
-                break;
+                const files = fs.readdirSync(tempDir);
+                downloadedFile = files.find(f => f.includes(String(timestamp)) && !f.endsWith('.part'));
+                if (downloadedFile) {
+                    downloadSuccess = true;
+                    console.log(`[Download] Verified file created on disk: ${downloadedFile}`);
+                    break;
+                }
             } catch (err) {
                 lastError = err;
                 console.warn(`[Download] Download mode '${dlMode}' failed:`, err.message ? err.message.substring(0, 120) : '');
+
+                const files = fs.readdirSync(tempDir);
+                downloadedFile = files.find(f => f.includes(String(timestamp)) && !f.endsWith('.part'));
+                if (downloadedFile) {
+                    downloadSuccess = true;
+                    console.log(`[Download] Verified file created on disk despite notice: ${downloadedFile}`);
+                    break;
+                }
             }
         }
 
-        if (!downloadSuccess) {
-            throw lastError || new Error("Failed to download media stream.");
-        }
-
-        const files = fs.readdirSync(tempDir);
-        // Find any file in tempDir created for this download, ignoring .part temporary files
-        const downloadedFile = files.find(f => f.includes(String(timestamp)) && !f.endsWith('.part'));
-
-        if (!downloadedFile) {
+        if (!downloadSuccess || !downloadedFile) {
             const allFiles = fs.readdirSync(tempDir);
-            console.error(`[Error] All files in tempDir:`, allFiles);
-            throw new Error(`Downloaded file raw_${timestamp} not found in temp. Available: ${allFiles.join(', ')}`);
+            throw lastError || new Error(`Downloaded file raw_${timestamp} not found in temp. Available: ${allFiles.join(', ')}`);
         }
 
         const downloadedFilePath = path.join(tempDir, downloadedFile);
