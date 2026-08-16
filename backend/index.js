@@ -4,13 +4,32 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
+function getYtDlpBin() {
+    if (process.platform === 'win32') {
+        const userPath = process.env.LOCALAPPDATA || 'C:\\Users\\meetk\\AppData\\Local';
+        const pythonPaths = [
+            path.join(userPath, 'Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\Scripts\\yt-dlp.exe'),
+            path.join(userPath, 'Programs\\Python\\Python313\\Scripts\\yt-dlp.exe'),
+            path.join(userPath, 'Programs\\Python\\Python312\\Scripts\\yt-dlp.exe'),
+            path.join(userPath, 'Programs\\Python\\Python311\\Scripts\\yt-dlp.exe'),
+            'yt-dlp.exe',
+            'yt-dlp'
+        ];
+        for (const p of pythonPaths) {
+            if (fs.existsSync(p)) return p;
+        }
+    }
+    return 'yt-dlp';
+}
+
 const ffmpegPath = 'ffmpeg';
-const ytdlpBin = 'yt-dlp';
+const ytdlpBin = getYtDlpBin();
 
 function runYtDlp(argsArray) {
     return new Promise((resolve, reject) => {
-        console.log(`[yt-dlp] Spawning: ${ytdlpBin} ${argsArray.join(' ').substring(0, 150)}...`);
-        const child = spawn(ytdlpBin, argsArray);
+        console.log(`[yt-dlp] Spawning (${ytdlpBin}): ${argsArray.join(' ').substring(0, 150)}...`);
+        const isWin = process.platform === 'win32';
+        const child = spawn(ytdlpBin, argsArray, { shell: isWin });
 
         let stdout = '';
         let stderr = '';
@@ -171,7 +190,8 @@ app.post('/api/download', async (req, res) => {
             ffmpegArgs = ['-y', '-i', downloadedFilePath, '-vf', 'scale=trunc(oh*a/2)*2:480', '-c:v', 'libx264', '-preset', 'fast', '-b:v', `${videoBitrate}`, '-b:a', `${audioBitrate}`, '-c:a', 'aac', finalFilePath];
         }
 
-        const ffmpegChild = spawn(ffmpegPath, ffmpegArgs);
+        const isWin = process.platform === 'win32';
+        const ffmpegChild = spawn(ffmpegPath, ffmpegArgs, { shell: isWin });
         let ffmpegErr = '';
 
         ffmpegChild.stderr.on('data', data => { ffmpegErr += data.toString(); });
