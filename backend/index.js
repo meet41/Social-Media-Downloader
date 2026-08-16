@@ -24,7 +24,7 @@ function runYtDlp(argsArray) {
         const fullArgs = ['-m', 'yt_dlp', ...argsArray];
 
         console.log(`[yt-dlp] Spawning: ${cmd} ${fullArgs.join(' ').substring(0, 150)}...`);
-        const child = spawn(cmd, fullArgs, { shell: isWin });
+        const child = spawn(cmd, fullArgs, { shell: false });
 
         let stdout = '';
         let stderr = '';
@@ -185,8 +185,7 @@ app.post('/api/download', async (req, res) => {
             ffmpegArgs = ['-y', '-i', downloadedFilePath, '-vf', 'scale=trunc(oh*a/2)*2:480', '-c:v', 'libx264', '-preset', 'fast', '-b:v', `${videoBitrate}`, '-b:a', `${audioBitrate}`, '-c:a', 'aac', finalFilePath];
         }
 
-        const isWin = process.platform === 'win32';
-        const ffmpegChild = spawn(ffmpegPath, ffmpegArgs, { shell: isWin });
+        const ffmpegChild = spawn(ffmpegPath, ffmpegArgs, { shell: false });
         let ffmpegErr = '';
 
         ffmpegChild.stderr.on('data', data => { ffmpegErr += data.toString(); });
