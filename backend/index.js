@@ -237,11 +237,13 @@ app.post('/api/download', async (req, res) => {
         }
 
         const files = fs.readdirSync(tempDir);
-        const downloadedFile = files.find(f => f.includes(String(timestamp)));
+        // Find any file in tempDir created for this download, ignoring .part temporary files
+        const downloadedFile = files.find(f => f.includes(String(timestamp)) && !f.endsWith('.part'));
 
         if (!downloadedFile) {
-            console.error(`[Error] Files in tempDir:`, files);
-            throw new Error("Downloaded file not found on server.");
+            const allFiles = fs.readdirSync(tempDir);
+            console.error(`[Error] All files in tempDir:`, allFiles);
+            throw new Error(`Downloaded file raw_${timestamp} not found in temp. Available: ${allFiles.join(', ')}`);
         }
 
         const downloadedFilePath = path.join(tempDir, downloadedFile);
