@@ -12,8 +12,9 @@ function runYtDlp(args) {
         const cmd = `"${ytdlpBin}" ${args}`;
         console.log(`[yt-dlp] Executing: ${cmd.substring(0, 180)}...`);
         exec(cmd, { maxBuffer: 1024 * 1024 * 50, timeout: 180000 }, (error, stdout, stderr) => {
-            if (error) {
-                return reject(new Error(stderr || stdout || error.message));
+            if (error && (!stdout || !stdout.trim())) {
+                console.error(`[yt-dlp error] Stderr:`, stderr ? stderr.substring(0, 300) : error.message);
+                return reject(new Error(stderr || error.message));
             }
             resolve(stdout);
         });
