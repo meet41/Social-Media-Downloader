@@ -34,29 +34,6 @@ if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true });
 }
 
-const cookiesFile = path.join(__dirname, 'cookies.txt');
-
-function syncCookies() {
-    if (process.env.YOUTUBE_COOKIES) {
-        try {
-            let content = process.env.YOUTUBE_COOKIES;
-            if (content.includes('\\n')) {
-                content = content.replace(/\\n/g, '\n');
-            }
-            if (content.includes('\\t')) {
-                content = content.replace(/\\t/g, '\t');
-            }
-            fs.writeFileSync(cookiesFile, content.trim(), 'utf8');
-            return true;
-        } catch (e) {
-            console.error("Failed to sync cookies from env:", e);
-        }
-    }
-    return fs.existsSync(cookiesFile);
-}
-
-syncCookies();
-
 function sanitizeFilename(name) {
     if (!name) return 'media';
     const cleaned = name
@@ -66,26 +43,21 @@ function sanitizeFilename(name) {
     return cleaned.substring(0, 80) || 'media';
 }
 
-function getPlatformArgs(url, clientMode = 'all_clients') {
+function getPlatformArgs(url, clientMode = 'tv_embedded') {
     const isYouTube = /youtu(\.be|be\.com)/i.test(url);
     const isFacebook = /facebook\.com|fb\.watch/i.test(url);
     const isInstagram = /instagram\.com/i.test(url);
 
     let args = `--no-warnings --no-check-certificates`;
 
-    const hasCookies = syncCookies();
-    if (hasCookies) {
-        args += ` --cookies "${cookiesFile}"`;
-    }
-
     if (isYouTube) {
-        if (clientMode === 'all_clients') {
-            args += ` --extractor-args "youtube:player_client=tv_embedded,android,ios,mweb"`;
-        } else if (clientMode === 'tv_only') {
-            args += ` --extractor-args "youtube:player_client=tv_embedded,tv"`;
-        } else if (clientMode === 'mobile_only') {
-            args += ` --extractor-args "youtube:player_client=android,ios,mweb"`;
-        } else if (clientMode === 'web_only') {
+        if (clientMode === 'tv_embedded') {
+            args += ` --extractor-args "youtube:player_client=tv_embedded,ios"`;
+        } else if (clientMode === 'mweb_ios') {
+            args += ` --extractor-args "youtube:player_client=mweb,ios"`;
+        } else if (clientMode === 'android') {
+            args += ` --extractor-args "youtube:player_client=android,web"`;
+        } else if (clientMode === 'web') {
             args += ` --extractor-args "youtube:player_client=web_embedded,web"`;
         }
         args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
@@ -104,10 +76,8 @@ function getPlatformArgs(url, clientMode = 'all_clients') {
 }
 
 app.get('/health', (req, res) => {
-    const hasCookies = syncCookies();
     res.json({
         status: 'ok',
-        cookies_loaded: hasCookies,
         yt_dlp_bin: ytdlpBin,
         time: new Date()
     });
@@ -126,7 +96,7 @@ app.post('/api/download', async (req, res) => {
         console.log(`========================================`);
 
         const isYouTube = /youtu(\.be|be\.com)/i.test(url);
-        const modes = isYouTube ? ['all_clients', 'tv_only', 'mobile_only', 'web_only'] : ['default'];
+        const modes = isYouTube ? ['tv_embedded', 'mweb_ios', 'android', 'web'] : ['default'];
 
         let info = null;
         let successfulMode = modes[0];
