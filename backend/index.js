@@ -44,7 +44,7 @@ function sanitizeFilename(name) {
     return cleaned.substring(0, 80) || 'media';
 }
 
-function getPlatformArgs(url, clientMode = 'no_cookies_android') {
+function getPlatformArgs(url, clientMode = 'android') {
     const isYouTube = /youtu(\.be|be\.com)/i.test(url);
     const isFacebook = /facebook\.com|fb\.watch/i.test(url);
     const isInstagram = /instagram\.com/i.test(url);
@@ -53,12 +53,12 @@ function getPlatformArgs(url, clientMode = 'no_cookies_android') {
 
     if (isYouTube) {
         args += ` --no-cookies`;
-        if (clientMode === 'no_cookies_android') {
-            args += ` --extractor-args "youtube:player_client=android"`;
-        } else if (clientMode === 'no_cookies_mweb') {
-            args += ` --extractor-args "youtube:player_client=mweb"`;
+        if (clientMode === 'android') {
+            args += ` --extractor-args "youtube:player_client=android,mweb,ios"`;
+        } else if (clientMode === 'mweb') {
+            args += ` --extractor-args "youtube:player_client=mweb,android"`;
         } else {
-            args += ` --extractor-args "youtube:player_client=android"`;
+            args += ` --extractor-args "youtube:player_client=android,mweb"`;
         }
     } else if (isFacebook) {
         args += ` --add-header "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"`;
@@ -94,7 +94,7 @@ app.post('/api/download', async (req, res) => {
         console.log(`========================================`);
 
         const isYouTube = /youtu(\.be|be\.com)/i.test(url);
-        const modes = isYouTube ? ['no_cookies_android', 'no_cookies_mweb'] : ['default'];
+        const modes = isYouTube ? ['android', 'mweb'] : ['default'];
 
         let info = null;
         let successfulMode = modes[0];
