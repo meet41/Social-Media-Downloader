@@ -199,7 +199,7 @@ app.post('/api/download', async (req, res) => {
         exec(ffmpegCmd, { timeout: 300000 }, (error, stdout, stderr) => {
             if (error) {
                 console.error(`[FFmpeg] Error: ${error.message}`);
-                return res.status(500).json({ error: 'Media compression failed.' });
+                return res.status(500).json({ error: `Media compression failed: ${error.message}` });
             }
 
             console.log(`[FFmpeg] Compression completed: ${finalFilePath}`);
@@ -223,13 +223,7 @@ app.post('/api/download', async (req, res) => {
 
     } catch (err) {
         console.error("Error processing request:", err);
-        let userMessage = err.message || 'Failed to process media';
-
-        if (userMessage.includes('No video formats found') || userMessage.includes('share/p/')) {
-            userMessage = 'This Facebook link is a Group/Private post. Please provide a direct public video or reel link.';
-        }
-
-        res.status(500).json({ error: userMessage });
+        res.status(500).json({ error: err.message || 'Failed to process media' });
     }
 });
 
