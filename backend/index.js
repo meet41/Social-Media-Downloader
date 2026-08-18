@@ -75,13 +75,11 @@ function getPlatformArgsArray(url, clientMode = 'android') {
     if (isYouTube) {
         args.push('--no-cookies');
         if (clientMode === 'android') {
-            args.push('--extractor-args', 'youtube:player_client=android,mweb');
-        } else if (clientMode === 'mweb') {
-            args.push('--extractor-args', 'youtube:player_client=mweb,tv,ios');
-        } else if (clientMode === 'ios') {
-            args.push('--extractor-args', 'youtube:player_client=ios,mweb,tv');
+            args.push('--extractor-args', 'youtube:player_client=android,android_creator,web_creator');
+        } else if (clientMode === 'creator') {
+            args.push('--extractor-args', 'youtube:player_client=android_creator,android,web_creator');
         } else {
-            args.push('--extractor-args', 'youtube:player_client=tv,android,mweb');
+            args.push('--extractor-args', 'youtube:player_client=web_creator,android_vr,android');
         }
     } else {
         args.push('--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36');
@@ -151,7 +149,7 @@ app.post('/api/download', async (req, res) => {
         // Step 2: Stream Download
         const downloadArgs = [
             '-o', downloadedFilePath,
-            '-f', 'b/best[height<=480]/best',
+            '-f', '18/b/best[height<=480]/best',
             '--no-part',
             ...getPlatformArgsArray(url, 'android'),
             '--',
@@ -162,12 +160,12 @@ app.post('/api/download', async (req, res) => {
         try {
             await runYtDlp(downloadArgs);
         } catch (dlErr) {
-            console.warn('[Download] Retrying with mweb client...', dlErr.message ? dlErr.message.substring(0, 100) : '');
+            console.warn('[Download] Retrying with creator client...', dlErr.message ? dlErr.message.substring(0, 100) : '');
             const fallbackArgs = [
                 '-o', downloadedFilePath,
-                '-f', 'b/best[height<=480]/best',
+                '-f', '18/b/best[height<=480]/best',
                 '--no-part',
-                ...getPlatformArgsArray(url, 'ios'),
+                ...getPlatformArgsArray(url, 'creator'),
                 '--',
                 url
             ];
