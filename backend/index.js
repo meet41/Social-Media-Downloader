@@ -1,4 +1,4 @@
-﻿const express = require('express');
+const express = require('express');
 const cors = require('cors');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -77,9 +77,11 @@ function getPlatformArgsArray(url, clientMode = 'android') {
         if (clientMode === 'android') {
             args.push('--extractor-args', 'youtube:player_client=android,mweb');
         } else if (clientMode === 'mweb') {
-            args.push('--extractor-args', 'youtube:player_client=mweb,android');
+            args.push('--extractor-args', 'youtube:player_client=mweb,tv,ios');
+        } else if (clientMode === 'ios') {
+            args.push('--extractor-args', 'youtube:player_client=ios,mweb,tv');
         } else {
-            args.push('--extractor-args', 'youtube:player_client=android,mweb,web_creator');
+            args.push('--extractor-args', 'youtube:player_client=tv,android,mweb');
         }
     } else {
         args.push('--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36');
@@ -115,12 +117,12 @@ app.post('/api/download', async (req, res) => {
         // Step 1: Metadata extraction
         let info = null;
         try {
-            const jsonOutput = await runYtDlp([url, '--dump-json', ...getPlatformArgsArray(url, 'android')]);
+            const jsonOutput = await runYtDlp(['--dump-json', ...getPlatformArgsArray(url, 'android'), '--', url]);
             info = JSON.parse(jsonOutput);
         } catch (e) {
             console.warn('[Metadata] android mode notice, trying mweb:', e.message ? e.message.substring(0, 100) : '');
             try {
-                const jsonOutput = await runYtDlp([url, '--dump-json', ...getPlatformArgsArray(url, 'mweb')]);
+                const jsonOutput = await runYtDlp(['--dump-json', ...getPlatformArgsArray(url, 'mweb'), '--', url]);
                 info = JSON.parse(jsonOutput);
             } catch (err2) {
                 console.warn('[Metadata] mweb fallback notice:', err2.message ? err2.message.substring(0, 100) : '');
@@ -148,11 +150,12 @@ app.post('/api/download', async (req, res) => {
 
         // Step 2: Stream Download
         const downloadArgs = [
-            url,
             '-o', downloadedFilePath,
             '-f', 'b/best[height<=480]/best',
             '--no-part',
-            ...getPlatformArgsArray(url, 'android')
+            ...getPlatformArgsArray(url, 'android'),
+            '--',
+            url
         ];
 
         console.log(`[Download] Downloading stream...`);
@@ -161,29 +164,39 @@ app.post('/api/download', async (req, res) => {
         } catch (dlErr) {
             console.warn('[Download] Retrying with mweb client...', dlErr.message ? dlErr.message.substring(0, 100) : '');
             const fallbackArgs = [
-                url,
                 '-o', downloadedFilePath,
                 '-f', 'b/best[height<=480]/best',
                 '--no-part',
-                ...getPlatformArgsArray(url, 'mweb')
+                ...getPlatformArgsArray(url, 'ios'),
+                '--',
+                url
             ];
             await runYtDlp(fallbackArgs);
         }
 
-        if (!fs.existsSync(downloadedFilePath) || fs.statSync(downloadedFilePath).size === 0) {
-            throw new Error('Failed to download media stream to server disk.');
+        let actualDownloadedFile = downloadedFilePath;
+        if (!fs.existsSync(actualDownloadedFile) || fs.statSync(actualDownloadedFile).size === 0) {
+            const files = fs.readdirSync(tempDir);
+            const match = files.find(f => f.startsWith(`raw_${timestamp}`));
+            if (match) {
+                actualDownloadedFile = path.join(tempDir, match);
+            }
         }
 
-        console.log(`[FFmpeg] Processing ${downloadedFilePath}...`);
+        if (!fs.existsSync(actualDownloadedFile) || fs.statSync(actualDownloadedFile).size === 0) {
+            throw new Error('Failed to download media stream. Video may be unavailable, private, or restricted.');
+        }
+
+        console.log(`[FFmpeg] Processing ${actualDownloadedFile}...`);
 
         let ffmpegArgs = [];
         if (format === 'audio') {
             const audioBitrate = Math.max(targetTotalBitrate, 32000);
-            ffmpegArgs = ['-y', '-i', downloadedFilePath, '-b:a', `${audioBitrate}`, '-c:a', 'mp3', '-vn', finalFilePath];
+            ffmpegArgs = ['-y', '-i', actualDownloadedFile, '-b:a', `${audioBitrate}`, '-c:a', 'mp3', '-vn', finalFilePath];
         } else {
             let audioBitrate = 64000;
             let videoBitrate = Math.max(targetTotalBitrate - audioBitrate, 150000);
-            ffmpegArgs = ['-y', '-i', downloadedFilePath, '-vf', 'scale=trunc(oh*a/2)*2:480', '-c:v', 'libx264', '-preset', 'fast', '-b:v', `${videoBitrate}`, '-b:a', `${audioBitrate}`, '-c:a', 'aac', finalFilePath];
+            ffmpegArgs = ['-y', '-i', actualDownloadedFile, '-vf', 'scale=trunc(oh*a/2)*2:480', '-c:v', 'libx264', '-preset', 'fast', '-b:v', `${videoBitrate}`, '-b:a', `${audioBitrate}`, '-c:a', 'aac', finalFilePath];
         }
 
         const ffmpegChild = spawn(ffmpegPath, ffmpegArgs, { shell: false });
@@ -208,7 +221,7 @@ app.post('/api/download', async (req, res) => {
 
             fileStream.on('close', () => {
                 try {
-                    if (fs.existsSync(downloadedFilePath)) fs.unlinkSync(downloadedFilePath);
+                    if (fs.existsSync(actualDownloadedFile)) fs.unlinkSync(actualDownloadedFile);
                     if (fs.existsSync(finalFilePath)) fs.unlinkSync(finalFilePath);
                 } catch (cleanupErr) {
                     console.error("Cleanup error:", cleanupErr);
@@ -218,7 +231,13 @@ app.post('/api/download', async (req, res) => {
 
     } catch (err) {
         console.error("Error processing request:", err);
-        res.status(500).json({ error: err.message || 'Failed to process media' });
+        let errorMsg = err.message || 'Failed to process media';
+        if (errorMsg.includes('Video unavailable')) {
+            errorMsg = 'This video is unavailable, deleted, or private on YouTube.';
+        } else if (errorMsg.includes('Sign in to confirm')) {
+            errorMsg = 'YouTube requested bot verification for this video.';
+        }
+        res.status(500).json({ error: errorMsg });
     }
 });
 
