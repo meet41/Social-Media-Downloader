@@ -1,4 +1,4 @@
-﻿# Force cache bust v2
+# Force cache bust v2
 FROM node:20-bookworm-slim
 
 RUN apt-get update && apt-get install -y \
@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python3 -m pip install --upgrade "yt-dlp[default]" pycryptodomex
+RUN python3 -m pip install --break-system-packages --upgrade "yt-dlp[default]" pycryptodomex
 
 WORKDIR /app
 
