@@ -1,4 +1,4 @@
-﻿# Node & dependencies
+# Node & dependencies
 node_modules/
 .npm
 dist/
@@ -15,7 +15,7 @@ lerna-debug.log*
 # Temp downloaded media files
 backend/temp/
 temp/
-cookies.txt
+!backend/cookies.txt
 
 # Editor / OS
 .vscode/

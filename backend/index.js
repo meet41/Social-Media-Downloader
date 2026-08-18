@@ -78,11 +78,11 @@ function getPlatformArgsArray(url, clientMode = 'android') {
             args.push('--cookies', cookiesPath);
         }
         if (clientMode === 'android') {
-            args.push('--extractor-args', 'youtube:player_client=android,android_creator,web_creator');
+            args.push('--extractor-args', 'youtube:player_client=tv,android,web');
         } else if (clientMode === 'creator') {
-            args.push('--extractor-args', 'youtube:player_client=android_creator,android,web_creator');
+            args.push('--extractor-args', 'youtube:player_client=android,web,tv');
         } else {
-            args.push('--extractor-args', 'youtube:player_client=web_creator,android_vr,android');
+            args.push('--extractor-args', 'youtube:player_client=web,tv,android');
         }
     } else {
         args.push('--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36');
