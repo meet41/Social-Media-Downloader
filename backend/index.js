@@ -70,7 +70,7 @@ function sanitizeFilename(name) {
 
 function getPlatformArgsArray(url, clientMode = 'android') {
     const isYouTube = /youtu(\.be|be\.com)/i.test(url);
-    const args = ['--no-warnings', '--no-check-certificates'];
+    const args = ['--no-warnings', '--no-check-certificates', '--js-runtimes', 'node'];
 
     if (isYouTube) {
         args.push('--no-cookies');
