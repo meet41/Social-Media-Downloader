@@ -73,7 +73,10 @@ function getPlatformArgsArray(url, clientMode = 'android') {
     const args = ['--no-warnings', '--no-check-certificates', '--js-runtimes', 'node'];
 
     if (isYouTube) {
-        args.push('--no-cookies');
+        const cookiesPath = path.join(__dirname, 'cookies.txt');
+        if (fs.existsSync(cookiesPath)) {
+            args.push('--cookies', cookiesPath);
+        }
         if (clientMode === 'android') {
             args.push('--extractor-args', 'youtube:player_client=android,android_creator,web_creator');
         } else if (clientMode === 'creator') {
