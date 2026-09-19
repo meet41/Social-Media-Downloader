@@ -14,6 +14,9 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install --production
 
+# Install Playwright browser and dependencies
+RUN npx playwright install --with-deps chromium
+
 COPY . .
 
 EXPOSE 3001

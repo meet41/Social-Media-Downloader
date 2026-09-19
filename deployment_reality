@@ -1,0 +1,50 @@
+# Deployment Reality Check — YouTube Downloads on Free Cloud Hosting
+
+## The Core Problem
+
+**YouTube aggressively blocks ALL automated requests from cloud datacenter IP addresses** (AWS, GCP, Azure, etc.). This affects:
+
+- ✅ Your app works **locally** because your home internet has a **residential IP** that YouTube trusts
+- ❌ **Render**, Railway, Vercel, Heroku — all use datacenter IPs that YouTube blocks
+- ❌ **Piped/Invidious** — these YouTube proxy services are also mostly down/blocked by YouTube in 2026
+- ❌ No `yt-dlp` client mode (android, web, tv, ios) can bypass this from cloud IPs
+
+> [!IMPORTANT]
+> This is NOT a bug in your code — it's a deliberate, well-maintained anti-bot system by YouTube/Google that blocks every free cloud hosting provider.
+
+## What DOES Work From Render
+
+Your app **works perfectly** for non-YouTube platforms from Render:
+- ✅ Instagram Reels/Posts
+- ✅ TikTok videos
+- ✅ Twitter/X videos
+- ✅ Facebook videos
+- ✅ Reddit, Pinterest, Vimeo, SoundCloud, etc.
+
+## Options to Fix YouTube Downloads
+
+### Option A: Deploy Backend on Oracle Cloud Free Tier (Recommended — FREE Forever)
+Oracle Cloud provides **always-free** ARM VMs (4 OCPUs, 24GB RAM). Their IP ranges are less aggressively blocked by YouTube.
+
+1. Sign up at [cloud.oracle.com](https://cloud.oracle.com) (credit card required but never charged)
+2. Create an "Always Free" ARM VM (Ampere A1)
+3. Install Docker and run your existing `Dockerfile`
+4. Point your Vercel frontend's `VITE_BACKEND_URL` to the Oracle VM IP
+
+### Option B: Run Backend Locally + Cloudflare Tunnel (FREE)
+Keep the backend on your own PC and expose it to the internet:
+
+```bash
+# Install cloudflared
+# Then run:
+cloudflared tunnel --url http://localhost:3001
+```
+
+This gives you a public URL (e.g., `https://xxx.trycloudflare.com`) that your Vercel frontend can connect to. YouTube won't block it because requests come from your residential IP.
+
+### Option C: Accept YouTube Limitation
+Keep Render for everything else, and add a note in the UI that YouTube downloads require running the backend locally.
+
+### Option D: Use a Paid Residential Proxy (~$5-20/month)
+Add a proxy to yt-dlp: `--proxy socks5://user:pass@proxy.example.com:1080`
+Services like [webshare.io](https://webshare.io) offer cheap residential proxies.

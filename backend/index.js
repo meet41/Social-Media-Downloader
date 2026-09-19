@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { pipeline } = require('stream/promises');
 const { Readable } = require('stream');
+const { extractFacebookVideoUrl } = require('./fb_extractor');
 
 // ===== FFmpeg Setup =====
 function getFfmpegPath() {
@@ -14,11 +15,22 @@ function getFfmpegPath() {
             console.log(`[FFmpeg] Using binary at: ${ffmpegInstaller.path}`);
             return ffmpegInstaller.path;
         }
-    } catch (e) {}
+    } catch (e) { }
     return 'ffmpeg';
 }
 
 const ffmpegPath = getFfmpegPath();
+
+// ===== Environment Setup =====
+if (process.env.FB_COOKIES_BASE64) {
+    try {
+        const decoded = Buffer.from(process.env.FB_COOKIES_BASE64, 'base64').toString('utf8');
+        fs.writeFileSync(path.join(__dirname, 'facebook_cookies.txt'), decoded, { encoding: 'utf8' });
+        console.log('[Setup] Wrote FB_COOKIES_BASE64 to facebook_cookies.txt');
+    } catch (e) {
+        console.warn('[Setup] Failed to write FB_COOKIES_BASE64:', e.message);
+    }
+}
 
 // ===== yt-dlp Helper (used for non-YouTube platforms) =====
 function runYtDlp(argsArray) {
@@ -81,6 +93,30 @@ if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true });
 }
 
+// ===== Temp Folder Cleanup Routine =====
+// Runs every hour to clean up files older than 1 hour in case of crashes
+setInterval(() => {
+    try {
+        const files = fs.readdirSync(tempDir);
+        const now = Date.now();
+        let deletedCount = 0;
+        for (const file of files) {
+            const filePath = path.join(tempDir, file);
+            const stats = fs.statSync(filePath);
+            const ageMs = now - stats.mtimeMs;
+            if (ageMs > 60 * 60 * 1000) { // older than 1 hour
+                fs.unlinkSync(filePath);
+                deletedCount++;
+            }
+        }
+        if (deletedCount > 0) {
+            console.log(`[Cleanup] Deleted ${deletedCount} old temporary files`);
+        }
+    } catch (e) {
+        console.warn(`[Cleanup] Failed: ${e.message}`);
+    }
+}, 60 * 60 * 1000);
+
 // ===== Utility Functions =====
 function sanitizeFilename(name) {
     if (!name) return 'media';
@@ -94,7 +130,7 @@ function sanitizeFilename(name) {
 
 function cleanup(...files) {
     for (const f of files) {
-        try { if (f && fs.existsSync(f)) fs.unlinkSync(f); } catch (e) {}
+        try { if (f && fs.existsSync(f)) fs.unlinkSync(f); } catch (e) { }
     }
 }
 
@@ -326,25 +362,74 @@ app.post('/api/download', async (req, res) => {
         if (!downloadedFile) {
             console.log(`[yt-dlp] Falling back to yt-dlp...`);
 
+            const isFacebook = /facebook\.com|fb\.watch/i.test(url);
+
             const baseArgs = ['--no-warnings', '--no-check-certificates'];
-            if (!isYouTube) {
-                baseArgs.push('--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36');
-            }
+            baseArgs.push('--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36');
 
-            // Metadata
-            try {
-                const metaArgs = ['--dump-json', ...baseArgs, '--', url];
-                const jsonOutput = await runYtDlp(metaArgs);
-                const info = JSON.parse(jsonOutput);
-                title = info.title || info.fulltitle || title;
-                duration = info.duration || duration;
-            } catch (e) {
-                console.warn(`[yt-dlp] Metadata failed: ${e.message?.substring(0, 100)}`);
-            }
+            // Facebook: Use Playwright to intercept real CDN URLs for private/public videos
+            if (isFacebook) {
+                const fbCookiesFile = path.join(__dirname, 'facebook_cookies.txt');
 
-            // Download
-            const dlArgs = ['-o', rawFile, '-f', 'b/best[height<=480]/best', '--no-part', ...baseArgs, '--', url];
-            await runYtDlp(dlArgs);
+                // Strategy 1: Playwright (captures CDN URLs from network requests, works for private videos if logged in)
+                let playwrightSuccess = false;
+                try {
+                    console.log('[Facebook] Trying Playwright browser interception...');
+                    const videoUrl = await extractFacebookVideoUrl(url);
+                    if (videoUrl) {
+                        console.log('[Facebook] ✓ CDN URL captured, downloading...');
+                        await downloadStreamToFile(videoUrl, rawFile);
+                        downloadedFile = rawFile;
+                        title = 'facebook_video';
+                        playwrightSuccess = true;
+                        console.log('[Facebook] ✓ Download complete via Playwright');
+                    } else {
+                        console.warn('[Facebook] Playwright loaded page but found no video URL');
+                    }
+                } catch (e) {
+                    console.warn(`[Facebook] Playwright error: ${e.message?.substring(0, 120)}`);
+                }
+
+                // Strategy 2: yt-dlp + cookies fallback
+                if (!playwrightSuccess) {
+                    console.log('[Facebook] Falling back to yt-dlp with cookies...');
+                    const cookieArgs = fs.existsSync(fbCookiesFile) ? ['--cookies', fbCookiesFile] : [];
+                    const mobileUrl = url.replace(/^(https?:\/\/)(?:www\.)?facebook\.com/, '$1m.facebook.com');
+                    const urlsToTry = [url, ...(mobileUrl !== url ? [mobileUrl] : [])];
+
+                    let dlError = null;
+                    for (const tryUrl of urlsToTry) {
+                        try {
+                            console.log(`[Facebook] yt-dlp: ${tryUrl}`);
+                            const dlArgs = ['-o', rawFile, '-f', 'bv*[height<=480]+ba/b[height<=480]/best', '--no-part', ...baseArgs, ...cookieArgs, '--', tryUrl];
+                            await runYtDlp(dlArgs);
+                            dlError = null;
+                            break;
+                        } catch (e) {
+                            console.warn(`[Facebook] yt-dlp failed: ${e.message?.substring(0, 100)}`);
+                            dlError = e;
+                        }
+                    }
+                    if (dlError) throw new Error('FACEBOOK_BROKEN');
+                }
+            } else {
+                // Non-Facebook, non-YouTube: standard yt-dlp path
+
+                // Metadata
+                try {
+                    const metaArgs = ['--dump-json', ...baseArgs, '--', url];
+                    const jsonOutput = await runYtDlp(metaArgs);
+                    const info = JSON.parse(jsonOutput);
+                    title = info.title || info.fulltitle || title;
+                    duration = info.duration || duration;
+                } catch (e) {
+                    console.warn(`[yt-dlp] Metadata failed: ${e.message?.substring(0, 100)}`);
+                }
+
+                // Download
+                const dlArgs = ['-o', rawFile, '-f', 'bv*[height<=480]+ba/b[height<=480]/best', '--no-part', ...baseArgs, '--', url];
+                await runYtDlp(dlArgs);
+            }
 
             // Check for dynamic extension files
             if (!fs.existsSync(rawFile) || fs.statSync(rawFile).size === 0) {
@@ -422,6 +507,16 @@ app.post('/api/download', async (req, res) => {
             msg = 'Unable to access this video. YouTube may be blocking cloud requests. Try a different video.';
         } else if (msg.includes('Requested format is not available')) {
             msg = 'No compatible format found for this content.';
+        } else if (msg === 'FACEBOOK_NEEDS_COOKIES' || msg.includes('Cannot parse data') || (msg.includes('facebook') && msg.includes('parse'))) {
+            msg = 'Facebook requires login cookies to download videos.\n\n' +
+                'To fix this:\n' +
+                '1. Install the "Get cookies.txt LOCALLY" extension in Chrome or Edge\n' +
+                '2. Go to facebook.com while logged in\n' +
+                '3. Click the extension → Export → "facebook.com"\n' +
+                '4. Save the file as "facebook_cookies.txt" in the backend folder\n' +
+                '5. Restart the backend server and try again.';
+        } else if (msg.includes('Private video') || msg.includes('private')) {
+            msg = 'This video is private or requires a login to access.';
         }
         res.status(500).json({ error: msg });
     }
