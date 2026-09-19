@@ -31,6 +31,15 @@ if (process.env.FB_COOKIES_BASE64) {
         console.warn('[Setup] Failed to write FB_COOKIES_BASE64:', e.message);
     }
 }
+if (process.env.YT_COOKIES_BASE64) {
+    try {
+        const decoded = Buffer.from(process.env.YT_COOKIES_BASE64, 'base64').toString('utf8');
+        fs.writeFileSync(path.join(__dirname, 'youtube_cookies.txt'), decoded, { encoding: 'utf8' });
+        console.log('[Setup] Wrote YT_COOKIES_BASE64 to youtube_cookies.txt');
+    } catch (e) {
+        console.warn('[Setup] Failed to write YT_COOKIES_BASE64:', e.message);
+    }
+}
 
 // ===== yt-dlp Helper (used for non-YouTube platforms) =====
 function runYtDlp(argsArray) {
@@ -503,8 +512,13 @@ app.post('/api/download', async (req, res) => {
         let msg = err.message || 'Failed to process media';
         if (msg.includes('Video unavailable')) {
             msg = 'This video is unavailable, deleted, or private.';
-        } else if (msg.includes('Sign in to confirm') || msg.includes('not a bot')) {
-            msg = 'Unable to access this video. YouTube may be blocking cloud requests. Try a different video.';
+        } else if (msg.includes('Sign in to confirm') || msg.includes('not a bot') || msg.includes('403: Forbidden')) {
+            msg = 'YouTube is blocking requests from this server IP (common on Render/Vercel).\n\n' +
+                'To fix this, you must provide YouTube cookies:\n' +
+                '1. Use "Get cookies.txt LOCALLY" extension in Chrome on youtube.com\n' +
+                '2. Export and convert the file contents to Base64\n' +
+                '3. Add the Base64 string as "YT_COOKIES_BASE64" in your Render Environment Variables\n' +
+                '4. Restart the server and try again.';
         } else if (msg.includes('Requested format is not available')) {
             msg = 'No compatible format found for this content.';
         } else if (msg === 'FACEBOOK_NEEDS_COOKIES' || msg.includes('Cannot parse data') || (msg.includes('facebook') && msg.includes('parse'))) {
