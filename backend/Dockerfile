@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     python3 \
     python3-pip \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install --break-system-packages --upgrade "yt-dlp[default]@git+https://github.com/yt-dlp/yt-dlp.git" pycryptodomex
