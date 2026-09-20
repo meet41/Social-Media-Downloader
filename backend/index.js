@@ -299,6 +299,7 @@ app.get('/health', async (req, res) => {
 
     res.json({
         status: 'ok',
+        app_version: 'visionos-v1',
         yt_dlp_version: ytDlpVersion,
         youtube_cookies: ytCookies,
         facebook_cookies: fbCookies,
