@@ -271,10 +271,21 @@ async function downloadStreamToFile(streamUrl, outputPath) {
 
 // ===== Routes =====
 
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
+    let ytDlpVersion = 'unknown';
+    try {
+        ytDlpVersion = await runYtDlp(['--version']);
+        ytDlpVersion = ytDlpVersion.trim();
+    } catch (e) { }
+
+    const ytCookies = fs.existsSync(path.join(__dirname, 'youtube_cookies.txt'));
+    const fbCookies = fs.existsSync(path.join(__dirname, 'facebook_cookies.txt'));
+
     res.json({
         status: 'ok',
-        yt_dlp_bin: 'python -m yt_dlp',
+        yt_dlp_version: ytDlpVersion,
+        youtube_cookies: ytCookies,
+        facebook_cookies: fbCookies,
         time: new Date()
     });
 });
@@ -376,6 +387,8 @@ app.post('/api/download', async (req, res) => {
             const baseArgs = ['--no-warnings', '--no-check-certificates'];
             baseArgs.push('--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36');
 
+            const formatString = format === 'audio' ? 'ba/bestaudio/best' : 'bv*[height<=480]+ba/bv*[width<=480]+ba/bv*+ba/best';
+
             // Facebook: Use Playwright to intercept real CDN URLs for private/public videos
             if (isFacebook) {
                 const fbCookiesFile = path.join(__dirname, 'facebook_cookies.txt');
@@ -410,7 +423,6 @@ app.post('/api/download', async (req, res) => {
                     for (const tryUrl of urlsToTry) {
                         try {
                             console.log(`[Facebook] yt-dlp: ${tryUrl}`);
-                            const formatString = format === 'audio' ? 'ba/bestaudio/best' : 'bv*[height<=480]+ba/bv*[width<=480]+ba/bv*+ba/best';
                             const dlArgs = ['-o', rawFile, '-f', formatString, '--no-part', ...baseArgs, ...cookieArgs, '--', tryUrl];
                             await runYtDlp(dlArgs);
                             dlError = null;
@@ -422,14 +434,61 @@ app.post('/api/download', async (req, res) => {
                     }
                     if (dlError) throw new Error('FACEBOOK_BROKEN');
                 }
+            } else if (isYouTube) {
+                // YouTube yt-dlp fallback (Piped already failed above)
+                // Try multiple client strategies because datacenter IPs are often blocked
+                const ytCookiesFile = path.join(__dirname, 'youtube_cookies.txt');
+                const hasCookies = fs.existsSync(ytCookiesFile);
+
+                // Build a list of strategies to try in order
+                const strategies = [];
+                if (hasCookies) {
+                    strategies.push({ name: 'cookies+web', args: ['--cookies', ytCookiesFile] });
+                    strategies.push({ name: 'cookies+ios', args: ['--cookies', ytCookiesFile, '--extractor-args', 'youtube:client=ios'] });
+                }
+                strategies.push({ name: 'ios', args: ['--extractor-args', 'youtube:client=ios'] });
+                strategies.push({ name: 'android', args: ['--extractor-args', 'youtube:client=android'] });
+                strategies.push({ name: 'default', args: [] });
+
+                // Try metadata first
+                for (const strat of strategies) {
+                    try {
+                        const metaArgs = ['--dump-json', ...baseArgs, ...strat.args, '--', url];
+                        const jsonOutput = await runYtDlp(metaArgs);
+                        const info = JSON.parse(jsonOutput);
+                        title = info.title || info.fulltitle || title;
+                        duration = info.duration || duration;
+                        console.log(`[yt-dlp] ✓ Metadata via ${strat.name}: "${title}"`);
+                        break;
+                    } catch (e) {
+                        console.warn(`[yt-dlp] Metadata (${strat.name}) failed: ${e.message?.substring(0, 80)}`);
+                    }
+                }
+
+                // Try download with each strategy
+                let ytSuccess = false;
+                for (const strat of strategies) {
+                    try {
+                        console.log(`[yt-dlp] Trying download (${strat.name})...`);
+                        const dlArgs = ['-o', rawFile, '-f', formatString, '--no-part', ...baseArgs, ...strat.args, '--', url];
+                        await runYtDlp(dlArgs);
+                        ytSuccess = true;
+                        console.log(`[yt-dlp] ✓ Download successful via ${strat.name}`);
+                        break;
+                    } catch (e) {
+                        console.warn(`[yt-dlp] Download (${strat.name}) failed: ${e.message?.substring(0, 80)}`);
+                    }
+                }
+
+                if (!ytSuccess) {
+                    throw new Error('Failed to extract any player response');
+                }
             } else {
                 // Non-Facebook, non-YouTube: standard yt-dlp path
-                const ytCookiesFile = path.join(__dirname, 'youtube_cookies.txt');
-                const ytCookieArgs = fs.existsSync(ytCookiesFile) ? ['--cookies', ytCookiesFile] : [];
 
                 // Metadata
                 try {
-                    const metaArgs = ['--dump-json', ...baseArgs, ...ytCookieArgs, '--', url];
+                    const metaArgs = ['--dump-json', ...baseArgs, '--', url];
                     const jsonOutput = await runYtDlp(metaArgs);
                     const info = JSON.parse(jsonOutput);
                     title = info.title || info.fulltitle || title;
@@ -439,8 +498,7 @@ app.post('/api/download', async (req, res) => {
                 }
 
                 // Download
-                const formatString = format === 'audio' ? 'ba/bestaudio/best' : 'bv*[height<=480]+ba/bv*[width<=480]+ba/bv*+ba/best';
-                const dlArgs = ['-o', rawFile, '-f', formatString, '--no-part', ...baseArgs, ...ytCookieArgs, '--', url];
+                const dlArgs = ['-o', rawFile, '-f', formatString, '--no-part', ...baseArgs, '--', url];
                 await runYtDlp(dlArgs);
             }
 
