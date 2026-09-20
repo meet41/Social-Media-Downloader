@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python3 -m pip install --break-system-packages --upgrade "yt-dlp[default]" pycryptodomex
+RUN python3 -m pip install --break-system-packages --upgrade "yt-dlp[default]@git+https://github.com/yt-dlp/yt-dlp.git" pycryptodomex
 
 WORKDIR /app
 
