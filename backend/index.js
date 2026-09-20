@@ -41,8 +41,8 @@ if (process.env.YT_COOKIES_BASE64) {
     }
 }
 
-// ===== yt-dlp Helper (used for non-YouTube platforms) =====
-function runYtDlp(argsArray) {
+// ===== yt-dlp Helper =====
+function runYtDlp(argsArray, timeoutMs = 0) {
     return new Promise((resolve, reject) => {
         const isWin = process.platform === 'win32';
         const cmd = isWin ? 'python' : 'python3';
@@ -53,11 +53,23 @@ function runYtDlp(argsArray) {
 
         let stdout = '';
         let stderr = '';
+        let killed = false;
+        let timer = null;
+
+        if (timeoutMs > 0) {
+            timer = setTimeout(() => {
+                killed = true;
+                child.kill('SIGKILL');
+                reject(new Error(`yt-dlp timed out after ${timeoutMs / 1000}s`));
+            }, timeoutMs);
+        }
 
         child.stdout.on('data', data => { stdout += data.toString(); });
         child.stderr.on('data', data => { stderr += data.toString(); });
 
         child.on('close', code => {
+            if (timer) clearTimeout(timer);
+            if (killed) return;
             if (code !== 0) {
                 console.error(`[yt-dlp error] Code: ${code}, Stderr:`, stderr.substring(0, 300));
                 return reject(new Error(stderr || stdout || `yt-dlp process exited with code ${code}`));
@@ -65,7 +77,10 @@ function runYtDlp(argsArray) {
             resolve(stdout);
         });
 
-        child.on('error', err => reject(err));
+        child.on('error', err => {
+            if (timer) clearTimeout(timer);
+            if (!killed) reject(err);
+        });
     });
 }
 
@@ -436,47 +451,41 @@ app.post('/api/download', async (req, res) => {
                 }
             } else if (isYouTube) {
                 // YouTube yt-dlp fallback (Piped already failed above)
-                // Try multiple client strategies because datacenter IPs are often blocked
+                // Use cookies + ios client — most reliable for datacenter IPs
+                // Skip separate metadata step to save time on Render free tier
                 const ytCookiesFile = path.join(__dirname, 'youtube_cookies.txt');
                 const hasCookies = fs.existsSync(ytCookiesFile);
+                const cookieArgs = hasCookies ? ['--cookies', ytCookiesFile] : [];
 
-                // Build a list of strategies to try in order
-                const strategies = [];
-                if (hasCookies) {
-                    strategies.push({ name: 'cookies+web', args: ['--cookies', ytCookiesFile] });
-                    strategies.push({ name: 'cookies+ios', args: ['--cookies', ytCookiesFile, '--extractor-args', 'youtube:client=ios'] });
-                }
-                strategies.push({ name: 'ios', args: ['--extractor-args', 'youtube:client=ios'] });
-                strategies.push({ name: 'android', args: ['--extractor-args', 'youtube:client=android'] });
-                strategies.push({ name: 'default', args: [] });
+                // Only 2 strategies, each with a tight timeout
+                const strategies = [
+                    { name: 'cookies+ios', args: [...cookieArgs, '--extractor-args', 'youtube:client=ios'] },
+                    { name: 'ios-only', args: ['--extractor-args', 'youtube:client=ios'] },
+                ];
 
-                // Try metadata first
-                for (const strat of strategies) {
-                    try {
-                        const metaArgs = ['--dump-json', ...baseArgs, ...strat.args, '--', url];
-                        const jsonOutput = await runYtDlp(metaArgs);
-                        const info = JSON.parse(jsonOutput);
-                        title = info.title || info.fulltitle || title;
-                        duration = info.duration || duration;
-                        console.log(`[yt-dlp] ✓ Metadata via ${strat.name}: "${title}"`);
-                        break;
-                    } catch (e) {
-                        console.warn(`[yt-dlp] Metadata (${strat.name}) failed: ${e.message?.substring(0, 80)}`);
-                    }
-                }
-
-                // Try download with each strategy
                 let ytSuccess = false;
                 for (const strat of strategies) {
                     try {
-                        console.log(`[yt-dlp] Trying download (${strat.name})...`);
-                        const dlArgs = ['-o', rawFile, '-f', formatString, '--no-part', ...baseArgs, ...strat.args, '--', url];
-                        await runYtDlp(dlArgs);
+                        console.log(`[yt-dlp] Trying YouTube download (${strat.name})...`);
+                        // Use --print to get title in same call (no separate metadata step)
+                        const dlArgs = [
+                            '-o', rawFile, '-f', formatString, '--no-part',
+                            '--print', 'before_dl:%(title)s',
+                            '--print', 'before_dl:%(duration)s',
+                            ...baseArgs, ...strat.args, '--', url
+                        ];
+                        const output = await runYtDlp(dlArgs, 120000); // 2 min timeout
                         ytSuccess = true;
-                        console.log(`[yt-dlp] ✓ Download successful via ${strat.name}`);
+
+                        // Parse title/duration from --print output
+                        const lines = output.trim().split('\n');
+                        if (lines[0] && lines[0] !== 'NA') title = lines[0].trim();
+                        if (lines[1] && lines[1] !== 'NA') duration = parseFloat(lines[1]) || duration;
+
+                        console.log(`[yt-dlp] ✓ YouTube download successful via ${strat.name}: "${title}"`);
                         break;
                     } catch (e) {
-                        console.warn(`[yt-dlp] Download (${strat.name}) failed: ${e.message?.substring(0, 80)}`);
+                        console.warn(`[yt-dlp] YouTube (${strat.name}) failed: ${e.message?.substring(0, 100)}`);
                     }
                 }
 
