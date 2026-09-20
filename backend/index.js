@@ -423,10 +423,12 @@ app.post('/api/download', async (req, res) => {
                 }
             } else {
                 // Non-Facebook, non-YouTube: standard yt-dlp path
+                const ytCookiesFile = path.join(__dirname, 'youtube_cookies.txt');
+                const ytCookieArgs = fs.existsSync(ytCookiesFile) ? ['--cookies', ytCookiesFile] : [];
 
                 // Metadata
                 try {
-                    const metaArgs = ['--dump-json', ...baseArgs, '--', url];
+                    const metaArgs = ['--dump-json', ...baseArgs, ...ytCookieArgs, '--extractor-args', 'youtube:client=ios', '--', url];
                     const jsonOutput = await runYtDlp(metaArgs);
                     const info = JSON.parse(jsonOutput);
                     title = info.title || info.fulltitle || title;
@@ -436,7 +438,7 @@ app.post('/api/download', async (req, res) => {
                 }
 
                 // Download
-                const dlArgs = ['-o', rawFile, '-f', 'bv*[height<=480]+ba/b[height<=480]/best', '--no-part', ...baseArgs, '--', url];
+                const dlArgs = ['-o', rawFile, '-f', 'bv*[height<=480]+ba/b[height<=480]/best', '--no-part', ...baseArgs, ...ytCookieArgs, '--extractor-args', 'youtube:client=ios', '--', url];
                 await runYtDlp(dlArgs);
             }
 
@@ -512,7 +514,7 @@ app.post('/api/download', async (req, res) => {
         let msg = err.message || 'Failed to process media';
         if (msg.includes('Video unavailable')) {
             msg = 'This video is unavailable, deleted, or private.';
-        } else if (msg.includes('Sign in to confirm') || msg.includes('not a bot') || msg.includes('403: Forbidden')) {
+        } else if (msg.includes('Sign in to confirm') || msg.includes('not a bot') || msg.includes('403: Forbidden') || msg.includes('Failed to extract any player response')) {
             msg = 'YouTube is blocking requests from this server IP (common on Render/Vercel).\n\n' +
                 'To fix this, you must provide YouTube cookies:\n' +
                 '1. Use "Get cookies.txt LOCALLY" extension in Chrome on youtube.com\n' +
