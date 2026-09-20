@@ -229,11 +229,12 @@ function extractYouTubeVideoId(url) {
 async function fetchPipedStreams(videoId) {
     const instances = await getWorkingPipedInstances();
 
-    for (const apiUrl of instances) {
+    // Only try top 2 instances with a fast 2.5s timeout to avoid eating Render request budget
+    for (const apiUrl of instances.slice(0, 2)) {
         try {
             console.log(`[Piped] Trying ${apiUrl}/streams/${videoId}...`);
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 12000);
+            const timeout = setTimeout(() => controller.abort(), 2500);
 
             const res = await fetch(`${apiUrl}/streams/${videoId}`, {
                 signal: controller.signal,
@@ -451,38 +452,55 @@ app.post('/api/download', async (req, res) => {
                 }
             } else if (isYouTube) {
                 // YouTube yt-dlp fallback (Piped already failed above)
-                // Use cookies + ios client — most reliable for datacenter IPs
-                // Skip separate metadata step to save time on Render free tier
+                // Use android client which reliably bypasses cloud datacenter IP blocks and SABR issues
                 const ytCookiesFile = path.join(__dirname, 'youtube_cookies.txt');
                 const hasCookies = fs.existsSync(ytCookiesFile);
                 const cookieArgs = hasCookies ? ['--cookies', ytCookiesFile] : [];
 
-                // Only 2 strategies, each with a tight timeout
-                const strategies = [
-                    { name: 'cookies+ios', args: [...cookieArgs, '--extractor-args', 'youtube:client=ios'] },
-                    { name: 'ios-only', args: ['--extractor-args', 'youtube:client=ios'] },
-                ];
+                const strategies = [];
+                if (hasCookies) {
+                    strategies.push({
+                        name: 'cookies+android',
+                        args: [...cookieArgs, '--extractor-args', 'youtube:player_client=android']
+                    });
+                    strategies.push({
+                        name: 'cookies+default',
+                        args: [...cookieArgs]
+                    });
+                }
+                strategies.push({
+                    name: 'android',
+                    args: ['--extractor-args', 'youtube:player_client=android']
+                });
+                strategies.push({
+                    name: 'default',
+                    args: []
+                });
 
                 let ytSuccess = false;
                 for (const strat of strategies) {
                     try {
                         console.log(`[yt-dlp] Trying YouTube download (${strat.name})...`);
-                        // Use --print to get title in same call (no separate metadata step)
+                        // CRITICAL: Must use --no-simulate when using --print, otherwise yt-dlp only simulates!
                         const dlArgs = [
                             '-o', rawFile, '-f', formatString, '--no-part',
-                            '--print', 'before_dl:%(title)s',
-                            '--print', 'before_dl:%(duration)s',
+                            '--no-simulate',
+                            '--print', '%(title)s',
+                            '--print', '%(duration)s',
                             ...baseArgs, ...strat.args, '--', url
                         ];
-                        const output = await runYtDlp(dlArgs, 120000); // 2 min timeout
+                        const output = await runYtDlp(dlArgs, 40000); // 40s timeout per attempt
                         ytSuccess = true;
 
-                        // Parse title/duration from --print output
-                        const lines = output.trim().split('\n');
-                        if (lines[0] && lines[0] !== 'NA') title = lines[0].trim();
-                        if (lines[1] && lines[1] !== 'NA') duration = parseFloat(lines[1]) || duration;
+                        // Parse title/duration from clean output lines (ignore warnings/progress)
+                        const lines = output.trim().split('\n')
+                            .map(l => l.trim())
+                            .filter(l => l && !l.startsWith('WARNING:') && !l.startsWith('ERROR:') && !l.startsWith('['));
 
-                        console.log(`[yt-dlp] ✓ YouTube download successful via ${strat.name}: "${title}"`);
+                        if (lines[0]) title = lines[0];
+                        if (lines[1]) duration = parseFloat(lines[1]) || duration;
+
+                        console.log(`[yt-dlp] ✓ YouTube download successful via ${strat.name}: "${title}" (duration: ${duration}s)`);
                         break;
                     } catch (e) {
                         console.warn(`[yt-dlp] YouTube (${strat.name}) failed: ${e.message?.substring(0, 100)}`);
