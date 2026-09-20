@@ -299,7 +299,7 @@ app.get('/health', async (req, res) => {
 
     res.json({
         status: 'ok',
-        app_version: 'visionos-v1',
+        app_version: 'visionos-v2',
         yt_dlp_version: ytDlpVersion,
         youtube_cookies: ytCookies,
         facebook_cookies: fbCookies,
@@ -326,11 +326,9 @@ app.get('/api/diag', async (req, res) => {
 
     const results = {};
     const tests = [
-        { name: 'web_js_node', args: ['--js-runtimes', 'node', ...(hasCookies ? ['--cookies', ytCookiesFile] : []), '-s', testUrl] },
-        { name: 'visionos', args: ['--extractor-args', 'youtube:player_client=visionos', ...(hasCookies ? ['--cookies', ytCookiesFile] : []), '-s', testUrl] },
-        { name: 'tv', args: ['--extractor-args', 'youtube:player_client=tv', ...(hasCookies ? ['--cookies', ytCookiesFile] : []), '-s', testUrl] },
-        { name: 'web_creator', args: ['--extractor-args', 'youtube:player_client=web_creator', ...(hasCookies ? ['--cookies', ytCookiesFile] : []), '-s', testUrl] },
-        { name: 'mweb_js_node', args: ['--js-runtimes', 'node', '--extractor-args', 'youtube:player_client=mweb', ...(hasCookies ? ['--cookies', ytCookiesFile] : []), '-s', testUrl] }
+        { name: 'visionos_no_cookies', args: ['--extractor-args', 'youtube:player_client=visionos', '-s', testUrl] },
+        { name: 'visionos_with_cookies', args: hasCookies ? ['--cookies', ytCookiesFile, '--extractor-args', 'youtube:player_client=visionos', '-s', testUrl] : null },
+        { name: 'android_no_cookies', args: ['--extractor-args', 'youtube:player_client=android', '-s', testUrl] }
     ];
 
     for (const t of tests) {
@@ -497,32 +495,29 @@ app.post('/api/download', async (req, res) => {
                 const hasCookies = fs.existsSync(ytCookiesFile);
                 const cookieArgs = hasCookies ? ['--cookies', ytCookiesFile] : [];
 
-                // Priority strategies for YouTube:
-                // 1. visionos client: Bypasses cloud datacenter IP blocks and bot checks
-                // 2. visionos + cookies
-                // 3. web + cookies + node JS runtime
-                // 4. android fallback
-                const strategies = [
-                    {
-                        name: 'visionos',
-                        args: ['--js-runtimes', 'node', '--extractor-args', 'youtube:player_client=visionos']
-                    }
-                ];
-
+                // When cookies are present, use them first
+                const strategies = [];
                 if (hasCookies) {
                     strategies.push({
-                        name: 'visionos+cookies',
-                        args: [...cookieArgs, '--js-runtimes', 'node', '--extractor-args', 'youtube:player_client=visionos']
+                        name: 'cookies+default',
+                        args: [...cookieArgs]
                     });
                     strategies.push({
-                        name: 'web+cookies',
-                        args: [...cookieArgs, '--js-runtimes', 'node', '--extractor-args', 'youtube:player_client=web']
+                        name: 'cookies+web',
+                        args: [...cookieArgs, '--extractor-args', 'youtube:player_client=web']
+                    });
+                    strategies.push({
+                        name: 'cookies+visionos',
+                        args: [...cookieArgs, '--extractor-args', 'youtube:player_client=visionos']
                     });
                 }
-
                 strategies.push({
-                    name: 'android',
-                    args: ['--extractor-args', 'youtube:player_client=android']
+                    name: 'visionos',
+                    args: ['--extractor-args', 'youtube:player_client=visionos']
+                });
+                strategies.push({
+                    name: 'default',
+                    args: []
                 });
 
                 let ytSuccess = false;
