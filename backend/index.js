@@ -429,7 +429,7 @@ app.post('/api/download', async (req, res) => {
 
                 // Metadata
                 try {
-                    const metaArgs = ['--dump-json', ...baseArgs, ...ytCookieArgs, '--extractor-args', 'youtube:client=ios', '--', url];
+                    const metaArgs = ['--dump-json', ...baseArgs, ...ytCookieArgs, '--', url];
                     const jsonOutput = await runYtDlp(metaArgs);
                     const info = JSON.parse(jsonOutput);
                     title = info.title || info.fulltitle || title;
@@ -440,7 +440,7 @@ app.post('/api/download', async (req, res) => {
 
                 // Download
                 const formatString = format === 'audio' ? 'ba/bestaudio/best' : 'bv*[height<=480]+ba/bv*[width<=480]+ba/bv*+ba/best';
-                const dlArgs = ['-o', rawFile, '-f', formatString, '--no-part', ...baseArgs, ...ytCookieArgs, '--extractor-args', 'youtube:client=ios', '--', url];
+                const dlArgs = ['-o', rawFile, '-f', formatString, '--no-part', ...baseArgs, ...ytCookieArgs, '--', url];
                 await runYtDlp(dlArgs);
             }
 
