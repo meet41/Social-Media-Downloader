@@ -325,16 +325,17 @@ app.get('/api/diag', async (req, res) => {
 
     const results = {};
     const tests = [
-        { name: 'android_no_cookies', args: ['--extractor-args', 'youtube:player_client=android', '-s', testUrl] },
-        { name: 'android_with_cookies', args: hasCookies ? ['--cookies', ytCookiesFile, '--extractor-args', 'youtube:player_client=android', '-s', testUrl] : null },
-        { name: 'web_with_cookies', args: hasCookies ? ['--cookies', ytCookiesFile, '-s', testUrl] : null },
-        { name: 'default_no_cookies', args: ['-s', testUrl] }
+        { name: 'web_js_node', args: ['--js-runtimes', 'node', ...(hasCookies ? ['--cookies', ytCookiesFile] : []), '-s', testUrl] },
+        { name: 'visionos', args: ['--extractor-args', 'youtube:player_client=visionos', ...(hasCookies ? ['--cookies', ytCookiesFile] : []), '-s', testUrl] },
+        { name: 'tv', args: ['--extractor-args', 'youtube:player_client=tv', ...(hasCookies ? ['--cookies', ytCookiesFile] : []), '-s', testUrl] },
+        { name: 'web_creator', args: ['--extractor-args', 'youtube:player_client=web_creator', ...(hasCookies ? ['--cookies', ytCookiesFile] : []), '-s', testUrl] },
+        { name: 'mweb_js_node', args: ['--js-runtimes', 'node', '--extractor-args', 'youtube:player_client=mweb', ...(hasCookies ? ['--cookies', ytCookiesFile] : []), '-s', testUrl] }
     ];
 
     for (const t of tests) {
         if (!t.args) continue;
         try {
-            const out = await runYtDlp(t.args, 15000);
+            const out = await runYtDlp(t.args, 10000);
             results[t.name] = { success: true, output: out.substring(0, 300) };
         } catch (e) {
             results[t.name] = { success: false, error: e.message.substring(0, 300) };
@@ -495,24 +496,32 @@ app.post('/api/download', async (req, res) => {
                 const hasCookies = fs.existsSync(ytCookiesFile);
                 const cookieArgs = hasCookies ? ['--cookies', ytCookiesFile] : [];
 
-                const strategies = [];
+                // Priority strategies for YouTube:
+                // 1. visionos client: Bypasses cloud datacenter IP blocks and bot checks
+                // 2. visionos + cookies
+                // 3. web + cookies + node JS runtime
+                // 4. android fallback
+                const strategies = [
+                    {
+                        name: 'visionos',
+                        args: ['--js-runtimes', 'node', '--extractor-args', 'youtube:player_client=visionos']
+                    }
+                ];
+
                 if (hasCookies) {
                     strategies.push({
-                        name: 'cookies+android',
-                        args: [...cookieArgs, '--extractor-args', 'youtube:player_client=android']
+                        name: 'visionos+cookies',
+                        args: [...cookieArgs, '--js-runtimes', 'node', '--extractor-args', 'youtube:player_client=visionos']
                     });
                     strategies.push({
-                        name: 'cookies+default',
-                        args: [...cookieArgs]
+                        name: 'web+cookies',
+                        args: [...cookieArgs, '--js-runtimes', 'node', '--extractor-args', 'youtube:player_client=web']
                     });
                 }
+
                 strategies.push({
                     name: 'android',
                     args: ['--extractor-args', 'youtube:player_client=android']
-                });
-                strategies.push({
-                    name: 'default',
-                    args: []
                 });
 
                 let ytSuccess = false;
