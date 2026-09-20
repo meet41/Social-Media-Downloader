@@ -299,7 +299,7 @@ app.get('/health', async (req, res) => {
 
     res.json({
         status: 'ok',
-        app_version: 'visionos-v2',
+        app_version: 'visionos-v3',
         yt_dlp_version: ytDlpVersion,
         youtube_cookies: ytCookies,
         facebook_cookies: fbCookies,
@@ -441,7 +441,10 @@ app.post('/api/download', async (req, res) => {
             const baseArgs = ['--no-warnings', '--no-check-certificates'];
             baseArgs.push('--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36');
 
-            const formatString = format === 'audio' ? 'ba/bestaudio/best' : 'bv*[height<=480]+ba/bv*[width<=480]+ba/bv*+ba/best';
+            // Robust format selector that works across visionos, android, and web clients
+            const formatString = format === 'audio' 
+                ? 'bestaudio/ba/b/best' 
+                : 'bv*[height<=480]+ba/b[height<=480]/bv*+ba/best';
 
             // Facebook: Use Playwright to intercept real CDN URLs for private/public videos
             if (isFacebook) {
@@ -495,26 +498,27 @@ app.post('/api/download', async (req, res) => {
                 const hasCookies = fs.existsSync(ytCookiesFile);
                 const cookieArgs = hasCookies ? ['--cookies', ytCookiesFile] : [];
 
-                // When cookies are present, use them first
-                const strategies = [];
+                // 1. visionos without cookies: most successful on datacenter IPs without causing reload or missing format errors
+                // 2. cookies strategies: when user has authenticated cookies
+                // 3. default fallback
+                const strategies = [
+                    {
+                        name: 'visionos',
+                        args: ['--extractor-args', 'youtube:player_client=visionos']
+                    }
+                ];
+
                 if (hasCookies) {
-                    strategies.push({
-                        name: 'cookies+default',
-                        args: [...cookieArgs]
-                    });
-                    strategies.push({
-                        name: 'cookies+web',
-                        args: [...cookieArgs, '--extractor-args', 'youtube:player_client=web']
-                    });
                     strategies.push({
                         name: 'cookies+visionos',
                         args: [...cookieArgs, '--extractor-args', 'youtube:player_client=visionos']
                     });
+                    strategies.push({
+                        name: 'cookies+default',
+                        args: [...cookieArgs]
+                    });
                 }
-                strategies.push({
-                    name: 'visionos',
-                    args: ['--extractor-args', 'youtube:player_client=visionos']
-                });
+
                 strategies.push({
                     name: 'default',
                     args: []
@@ -644,13 +648,11 @@ app.post('/api/download', async (req, res) => {
         let msg = err.message || 'Failed to process media';
         if (msg.includes('Video unavailable')) {
             msg = 'This video is unavailable, deleted, or private.';
-        } else if (msg.includes('Sign in to confirm') || msg.includes('not a bot') || msg.includes('403: Forbidden') || msg.includes('Failed to extract any player response')) {
-            msg = 'YouTube is blocking requests from this server IP (common on Render/Vercel).\n\n' +
-                'To fix this, you must provide YouTube cookies:\n' +
-                '1. Use "Get cookies.txt LOCALLY" extension in Chrome on youtube.com\n' +
-                '2. Export and convert the file contents to Base64\n' +
-                '3. Add the Base64 string as "YT_COOKIES_BASE64" in your Render Environment Variables\n' +
-                '4. Restart the server and try again.';
+        } else if (msg.includes('Sign in to confirm') || msg.includes('not a bot')) {
+            msg = 'YouTube requires sign-in verification for this content on cloud servers.\n\n' +
+                'Please ensure valid YouTube cookies are provided in YT_COOKIES_BASE64.';
+        } else if (msg.includes('The page needs to be reloaded')) {
+            msg = 'YouTube requested a session reload. Please try again in a few moments.';
         } else if (msg.includes('Requested format is not available')) {
             msg = 'No compatible format found for this content.';
         } else if (msg === 'FACEBOOK_NEEDS_COOKIES' || msg.includes('Cannot parse data') || (msg.includes('facebook') && msg.includes('parse'))) {
