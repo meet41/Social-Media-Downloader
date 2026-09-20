@@ -410,7 +410,8 @@ app.post('/api/download', async (req, res) => {
                     for (const tryUrl of urlsToTry) {
                         try {
                             console.log(`[Facebook] yt-dlp: ${tryUrl}`);
-                            const dlArgs = ['-o', rawFile, '-f', 'bv*[height<=480]+ba/b[height<=480]/best', '--no-part', ...baseArgs, ...cookieArgs, '--', tryUrl];
+                            const formatString = format === 'audio' ? 'ba/bestaudio/best' : 'bv*[height<=480]+ba/b[height<=480]/best';
+                            const dlArgs = ['-o', rawFile, '-f', formatString, '--no-part', ...baseArgs, ...cookieArgs, '--', tryUrl];
                             await runYtDlp(dlArgs);
                             dlError = null;
                             break;
@@ -438,7 +439,8 @@ app.post('/api/download', async (req, res) => {
                 }
 
                 // Download
-                const dlArgs = ['-o', rawFile, '-f', 'bv*[height<=480]+ba/b[height<=480]/best', '--no-part', ...baseArgs, ...ytCookieArgs, '--extractor-args', 'youtube:client=ios', '--', url];
+                const formatString = format === 'audio' ? 'ba/bestaudio/best' : 'bv*[height<=480]+ba/b[height<=480]/best';
+                const dlArgs = ['-o', rawFile, '-f', formatString, '--no-part', ...baseArgs, ...ytCookieArgs, '--extractor-args', 'youtube:client=ios', '--', url];
                 await runYtDlp(dlArgs);
             }
 
