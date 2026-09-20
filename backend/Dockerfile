@@ -1,4 +1,4 @@
-# Force cache bust v2
+# Force cache bust v3 - updated $(date)
 FROM node:20-bookworm-slim
 
 RUN apt-get update && apt-get install -y \

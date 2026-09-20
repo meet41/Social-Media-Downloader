@@ -306,6 +306,44 @@ app.get('/health', async (req, res) => {
     });
 });
 
+app.get('/api/diag', async (req, res) => {
+    const testUrl = req.query.url || 'https://youtu.be/q6qDYR0dSgc';
+    const ytCookiesFile = path.join(__dirname, 'youtube_cookies.txt');
+    const hasCookies = fs.existsSync(ytCookiesFile);
+    let cookieStats = { exists: hasCookies };
+    if (hasCookies) {
+        try {
+            const content = fs.readFileSync(ytCookiesFile, 'utf8');
+            cookieStats.size = content.length;
+            cookieStats.lines = content.split('\n').length;
+            cookieStats.hasYoutube = content.includes('.youtube.com');
+            cookieStats.hasConsent = content.includes('CONSENT');
+        } catch (e) {
+            cookieStats.error = e.message;
+        }
+    }
+
+    const results = {};
+    const tests = [
+        { name: 'android_no_cookies', args: ['--extractor-args', 'youtube:player_client=android', '-s', testUrl] },
+        { name: 'android_with_cookies', args: hasCookies ? ['--cookies', ytCookiesFile, '--extractor-args', 'youtube:player_client=android', '-s', testUrl] : null },
+        { name: 'web_with_cookies', args: hasCookies ? ['--cookies', ytCookiesFile, '-s', testUrl] : null },
+        { name: 'default_no_cookies', args: ['-s', testUrl] }
+    ];
+
+    for (const t of tests) {
+        if (!t.args) continue;
+        try {
+            const out = await runYtDlp(t.args, 15000);
+            results[t.name] = { success: true, output: out.substring(0, 300) };
+        } catch (e) {
+            results[t.name] = { success: false, error: e.message.substring(0, 300) };
+        }
+    }
+
+    res.json({ cookieStats, results });
+});
+
 app.post('/api/download', async (req, res) => {
     const { url, format } = req.body;
 
